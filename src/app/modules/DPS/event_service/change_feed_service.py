@@ -35,7 +35,6 @@ class ChangeFeedListener:
         ) as producer:
 
             print("Listening to Cosmos Change Feed → Event Hub")
-            print(self.container)
             change_feed = self.container.query_items_change_feed(
                 is_start_from_beginning=False
             )
@@ -47,7 +46,7 @@ class ChangeFeedListener:
 
                     payload = json.dumps({
                         "news_doc_id": news_id,
-                        "partition_key": news_id   # CosmosDB partition key path is /news_id
+                        "partition_key": news_id
                     }).encode("utf-8")
 
                     event = EventData(payload)

@@ -3,11 +3,6 @@ from dataclasses import dataclass, field
 from collections import defaultdict
 import pandas as pd
 
-
-# ------------------------------------------------------------------
-# Data models
-# ------------------------------------------------------------------
-
 @dataclass
 class RawClientHolding:
     client_name: str
@@ -30,7 +25,6 @@ class RawClientHolding:
     asset_id: str
     asset_description: str
 
-
 @dataclass
 class ClientProfile:
     client_id: str
@@ -49,11 +43,6 @@ class ClientProfile:
     asset_type_weights: dict[str, float]
     query: str = field(default="")
     tags_of_interest: list[str] = field(default_factory=list)
-
-
-# ------------------------------------------------------------------
-# Profile builder
-# ------------------------------------------------------------------
 
 def build_client_profile(df: pd.DataFrame) -> ClientProfile:
     assert df["Client No."].nunique() == 1, "DataFrame must contain exactly one client."
@@ -132,56 +121,6 @@ def build_client_profile(df: pd.DataFrame) -> ClientProfile:
         query=query,
     )
 
-
-# ------------------------------------------------------------------
-# Tag derivation
-# ------------------------------------------------------------------
-
-# def _derive_tags(
-#     asset_classifications: list[str],
-#     asset_types: list[str],
-#     currencies: list[str],
-# ) -> list[str]:
-#     tags = set()
-
-#     classification_tag_map = {
-#         "Equities":     ["EARNINGS", "EARNINGS REPORT", "SHARE PRICE", "QUARTERLY RESULTS", "EARNINGS PER SHARE"],
-#         "Fixed Income": ["CREDIT RATING", "INTEREST RATES", "EARNINGS RELEASE", "TOTAL REVENUE", "FREE CASH FLOW", "NET INCOME", "RATINGS"],
-#         "Real Estate":  ["REAL ESTATE", "REIT", "DIVIDENDS", "DIVIDEND PAYMENTS", "RETURN ON EQUITY"],
-#         "Alternatives": ["STRUCTURED PRODUCTS", "MARKET RESEARCH REPORTS", "PRICE TARGET"],
-#         "Commodities":  ["MARKET RESEARCH REPORTS", "PRICE TARGET"],
-#         "Multi Assets": ["NET INCOME", "FREE CASH FLOW", "INSTITUTIONAL INVESTORS"],
-#     }
-#     for classification in asset_classifications:
-#         tags.update(classification_tag_map.get(classification, []))
-
-#     asset_type_tag_map = {
-#         "EQUITY":     ["EARNINGS", "SHARE PRICE", "EARNINGS PER SHARE", "QUARTERLY EARNINGS"],
-#         "FUNDS":      ["NET INCOME", "FREE CASH FLOW", "INSTITUTIONAL INVESTORS", "INSTITUTIONAL OWNERSHIP"],
-#         "BOND":       ["CREDIT RATING", "RATINGS", "INTEREST RATES"],
-#         "FIX_INCOME": ["CREDIT RATING", "RATINGS", "INTEREST RATES", "TOTAL REVENUE"],
-#         "REIT":       ["REAL ESTATE", "DIVIDEND PAYMENTS", "RETURN ON EQUITY"],
-#         "ALTERNATIV": ["STRUCTURED PRODUCTS", "PRICE TARGET"],
-#         "CASH":       [],
-#         "CFTD":       [],
-#     }
-#     for asset_type in asset_types:
-#         tags.update(asset_type_tag_map.get(asset_type, []))
-
-#     currency_tag_map = {
-#         "EUR": ["EUROPEAN REGULATORY NEWS"],
-#         "USD": ["EARNINGS", "QUARTERLY EARNINGS"],
-#     }
-#     for ccy in currencies:
-#         tags.update(currency_tag_map.get(ccy, []))
-
-#     return sorted(tags)
-
-
-# ------------------------------------------------------------------
-# Tag derivation — derived from actual holdings, not just classifications
-# ------------------------------------------------------------------
-
 def _derive_tags(
     asset_classifications: list[str],
     asset_types: list[str],
@@ -189,8 +128,6 @@ def _derive_tags(
 ) -> list[str]:
     tags = set()
 
-    # Only add tags that are genuinely specific to the classification
-    # Remove generic financial tags that apply to all portfolios
     classification_tag_map = {
         "Equities":     ["EQUITY MARKETS", "STOCK MARKET", "SHARE PRICE MOVEMENT"],
         "Fixed Income": ["BOND MARKETS", "INTEREST RATE CHANGES", "CREDIT EVENTS", "YIELD CURVE"],
@@ -231,10 +168,6 @@ def _derive_tags(
 
     return sorted(tags)
 
-# ------------------------------------------------------------------
-# Query builder
-# ------------------------------------------------------------------
-
 def _build_query(
     client_name: str,
     client_type: str,
@@ -247,14 +180,11 @@ def _build_query(
     total_aum_aed: float,
 ) -> str:
     parts = []
-
-    # -- 1. Client identity -------------------------------------------------
     parts.append(
         f"{client_name} is a {client_type.lower()} client "
         f"with an {mandate.lower().replace('-', ' ')} mandate."
     )
 
-    # -- 2. AUM context -----------------------------------------------------
     aum_m = total_aum_aed / 1_000_000
     if aum_m >= 1:
         parts.append(f"Total portfolio value is approximately {aum_m:.1f} million AED.")
@@ -262,7 +192,6 @@ def _build_query(
         aum_k = total_aum_aed / 1_000
         parts.append(f"Total portfolio value is approximately {aum_k:.0f} thousand AED.")
 
-    # -- 3. Portfolio composition -------------------------------------------
     if classification_weights:
         meaningful = {k: v for k, v in classification_weights.items() if v >= 0.01}
         sorted_cls = sorted(meaningful.items(), key=lambda x: x[1], reverse=True)
@@ -270,11 +199,9 @@ def _build_query(
         parts.append(f"The portfolio is allocated across: {', '.join(allocation_parts)}.")
     elif asset_type_weights:
         dominant = max(asset_type_weights, key=asset_type_weights.get)
-        # Human readable asset type label
         readable = _asset_type_label(dominant)
         parts.append(f"The portfolio is primarily held in {readable}.")
 
-    # -- 4. Currency exposure -----------------------------------------------
     foreign_ccys = [c for c in currencies if c != "AED"]
     if foreign_ccys:
         parts.append(
@@ -283,7 +210,6 @@ def _build_query(
     else:
         parts.append("The client holds assets in AED only.")
 
-    # -- 5. Holdings sentences ----------------------------------------------
     real_assets = [
         d for d in asset_descriptions
         if not d.startswith("AL-")
@@ -321,25 +247,6 @@ def _build_query(
             "with no active equity or bond positions."
         )
 
-    # # -- 6. Investment profile summary --------------------------------------
-    # if classification_weights:
-    #     dominant_cls    = max(classification_weights, key=classification_weights.get)
-    #     dominant_weight = classification_weights[dominant_cls]
-
-    #     if dominant_weight >= 0.7:
-    #         profile_desc = f"heavily concentrated in {dominant_cls.lower()}"
-    #     elif dominant_weight >= 0.4:
-    #         profile_desc = f"primarily focused on {dominant_cls.lower()}"
-    #     else:
-    #         profile_desc = "broadly diversified across asset classes"
-
-    #     parts.append(
-    #         f"The investment profile is {profile_desc}, with interest in earnings, "
-    #         f"market developments, and price movements relevant to portfolio holdings."
-    #     )
-
-    # return " ".join(parts)
-    # -- 6. Investment profile summary — specific, not generic --------------
     if classification_weights:
         dominant_cls    = max(classification_weights, key=classification_weights.get)
         dominant_weight = classification_weights[dominant_cls]
@@ -356,10 +263,6 @@ def _build_query(
 
     return " ".join(parts)
 
-# ------------------------------------------------------------------
-# Asset type human-readable label
-# ------------------------------------------------------------------
-
 _ASSET_TYPE_LABELS = {
     "CASH":       "cash",
     "CFTD":       "cash and fixed term deposits",
@@ -374,17 +277,6 @@ _ASSET_TYPE_LABELS = {
 def _asset_type_label(asset_type: str) -> str:
     return _ASSET_TYPE_LABELS.get(asset_type, asset_type.lower().replace("_", " "))
 
-
-# ------------------------------------------------------------------
-# Asset classifiers — order of precedence matters:
-#   options → funds → bonds → equities → other
-#
-# Each classifier is EXCLUSIVE — once matched, later ones are skipped.
-# This prevents CORP suffix from matching both bond and equity patterns.
-# ------------------------------------------------------------------
-
-# Suffixes that are genuinely part of a bond ticker (e.g. "DAMACR 7 08/26/28 CORP")
-# vs company names that just end in CORP/INC/PLC etc.
 _BOND_CORP_PATTERN = re.compile(
     r'\b\d+(\.\d+)?\s+\d{2}/\d{2}/\d{2,4}\s+CORP$'   # "7 08/26/28 CORP"
 )
@@ -397,8 +289,6 @@ _BOND_DECIMAL_COUPON = re.compile(
 _BOND_INTEGER_COUPON = re.compile(
     r'\b(BHCCN|ASTONM|SAGLEN|XRX|OB|HTZ|ARADAD)\s+\d{1,2}\s+\d{2}/\d{2}/\d{2,4}$'
 )
-
-# Company name suffixes — these do NOT indicate bonds
 _COMPANY_SUFFIXES = re.compile(
     r'\b(INC|AG|SE|SA|PLC|LTD|LLC|NV|BV|SPA|ASA|CORP|NYRT|GROUP)\.?$',
     re.IGNORECASE
@@ -475,11 +365,6 @@ def _looks_like_equity(desc: str) -> bool:
     # Plain all-caps names without suffix also qualify (e.g. "AIRBUS SE" already caught,
     # but also standalone names like "STRABAG SE", "OTP BANK NYRT")
     return all(c.isalpha() or c in " .+&/-" for c in desc)
-
-
-# ------------------------------------------------------------------
-# Build profiles for all clients
-# ------------------------------------------------------------------
 
 def build_all_client_profiles(df: pd.DataFrame) -> dict[str, ClientProfile]:
     """Build a ClientProfile for every client. Returns { client_id: ClientProfile }."""

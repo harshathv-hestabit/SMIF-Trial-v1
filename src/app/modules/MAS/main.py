@@ -29,7 +29,7 @@ async def ensure_checkpoint_container():
         except Exception:
             print(f"Checkpoint container exists: {CHECKPOINT_CONTAINER}")
 
-async def run_hnw_workflow(event_type,event_body: dict) -> dict:
+async def run_hnw_workflow(event_body: dict) -> dict:
     print("[Orchestrator] Starting HNW Client Workflow")
     initial_state: HNWState = {
         "event_data": event_body,           
@@ -84,7 +84,7 @@ def route_event(event_type: str, event_body: dict):
         print(f"[Orchestrator] Unknown event_type '{event_type}' — skipping")
         return
 
-    task = asyncio.create_task(handler(event_type,event_body))
+    task = asyncio.create_task(handler(event_body))
     task.add_done_callback(
         lambda t: print(f"[Orchestrator] Task error: {t.exception()}")
         if not t.cancelled() and t.exception()
@@ -93,7 +93,7 @@ def route_event(event_type: str, event_body: dict):
 
 async def process_event(partition_context, event: EventData):
     try:
-        print(event)
+        # print(event)
         properties = event.properties or {}
         raw = (
             properties.get(b"event_type")

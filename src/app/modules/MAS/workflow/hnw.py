@@ -1,8 +1,9 @@
-from typing import TypedDict, List, Optional
+from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, END
 from azure.cosmos import CosmosClient
 from elasticsearch import Elasticsearch
 from ..config import process_news_stream
+from ..util import EventExecutor
 import os
 from dotenv import load_dotenv
 load_dotenv()
@@ -86,27 +87,51 @@ def filter_candidates(state: HNWState) -> HNWState:
     return state
 
 
+# def create_insight_events(state: HNWState) -> HNWState:
+#     """
+#     Emit one insight event per candidate client, enriched with the
+#     matched ISINs / tags returned by the scoring step.
+#     """
+#     news_doc = state["news_doc"]
+#     state["generate_insight_events"] = [
+#         {
+#             "client_id":      client["client_id"],
+#             "client_name":    client.get("client_name"),
+#             "news_doc_id":    news_doc["id"],
+#             "news_title":     news_doc.get("title"),
+#             "relevance_score": client["relevance_score"],
+#             "matched_isins":  client.get("matched_isins", []),
+#             "matched_tags":   client.get("matched_tags", []),
+#             "priority":       "realtime",
+#         }
+#         for client in state["candidate_clients"]
+#     ]
+
+#     print(f"[HNW] Created {len(state['generate_insight_events'])} insight event(s)")
+#     return state
+
+# Instantiate once at app startup (long-lived)
+
 def create_insight_events(state: HNWState) -> HNWState:
-    """
-    Emit one insight event per candidate client, enriched with the
-    matched ISINs / tags returned by the scoring step.
-    """
     news_doc = state["news_doc"]
     state["generate_insight_events"] = [
         {
-            "client_id":      client["client_id"],
-            "client_name":    client.get("client_name"),
-            "news_doc_id":    news_doc["id"],
-            "news_title":     news_doc.get("title"),
+            "client_id":       client["client_id"],
+            "client_name":     client.get("client_name"),
+            "news_doc_id":     news_doc["id"],
+            "news_title":      news_doc.get("title"),
             "relevance_score": client["relevance_score"],
-            "matched_isins":  client.get("matched_isins", []),
-            "matched_tags":   client.get("matched_tags", []),
-            "priority":       "realtime",
+            "matched_isins":   client.get("matched_isins", []),
+            "matched_tags":    client.get("matched_tags", []),
+            "priority":        "realtime",
         }
         for client in state["candidate_clients"]
     ]
 
     print(f"[HNW] Created {len(state['generate_insight_events'])} insight event(s)")
+    with EventExecutor() as event_executor:
+        event_executor.publish_insight_events(state["generate_insight_events"])
+
     return state
 
 def has_news_doc(state: HNWState) -> str:
