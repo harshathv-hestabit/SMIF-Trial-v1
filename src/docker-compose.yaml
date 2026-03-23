@@ -72,8 +72,8 @@ services:
     container_name: eventhub-emulator
     hostname: eventhub-emulator
     ports:
-      - "5672:5672"     # AMQP
-      - "9092:9092"
+      - "127.0.0.1:5672:5672"     # AMQP for local Functions host
+      - "127.0.0.1:9092:9092"
     volumes:
       - ./app/common/eventhub-config.json:/Eventhubs_Emulator/ConfigFiles/Config.json
     environment:
@@ -83,6 +83,39 @@ services:
     depends_on:
       azurite:
         condition: service_healthy
+    networks:
+      - finance-net
+
+  servicebus-emulator:
+    image: mcr.microsoft.com/azure-messaging/servicebus-emulator:latest
+    container_name: servicebus-emulator
+    hostname: servicebus-emulator
+    ports:
+      - "127.0.0.2:5672:5672"     # AMQP for local Functions host
+      - "127.0.0.2:5300:5300"     # Management and health APIs
+    volumes:
+      - ./app/common/servicebus-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+    environment:
+      - SQL_SERVER=mssql
+      - MSSQL_SA_PASSWORD=${MSSQL_SA_PASSWORD:-ServiceBus_Emulator_123!}
+      - ACCEPT_EULA=${ACCEPT_EULA:-Y}
+      - EMULATOR_HTTP_PORT=${EMULATOR_HTTP_PORT:-5300}
+      - SQL_WAIT_INTERVAL=${SQL_WAIT_INTERVAL:-15}
+    depends_on:
+      mssql:
+        condition: service_started
+    networks:
+      finance-net:
+        aliases:
+          - servicebus-emulator
+
+  mssql:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: mssql
+    hostname: mssql
+    environment:
+      - ACCEPT_EULA=${ACCEPT_EULA:-Y}
+      - MSSQL_SA_PASSWORD=${MSSQL_SA_PASSWORD:-ServiceBus_Emulator_123!}
     networks:
       - finance-net
 
@@ -128,6 +161,8 @@ services:
         condition: service_healthy
       eventhub:
         condition: service_started
+      servicebus-emulator:
+        condition: service_started
     networks:
       - finance-net
     restart: on-failure
@@ -156,7 +191,7 @@ services:
         condition: service_healthy
       cosmos:
         condition: service_healthy
-      eventhub:
+      servicebus-emulator:
         condition: service_started
     networks:
       - finance-net
@@ -168,7 +203,29 @@ services:
       retries: 5
       start_period: 20s
 
-
+  eh_dispatcher:
+    build:
+      context: .
+      dockerfile: app/modules/EH_DISPATCHER/.dockerfile
+    container_name: eh-dispatcher
+    hostname: eh-dispatcher
+    env_file:
+      - .env.docker
+    volumes:
+      - ./.env.docker:/app/.env:ro
+    depends_on:
+      azurite:
+        condition: service_healthy
+      cosmos:
+        condition: service_healthy
+      servicebus-emulator:
+        condition: service_started
+      eventhub:
+        condition: service_started
+    networks:
+      - finance-net
+    restart: on-failure
+    
 volumes:
   azurite_data:
   cosmos_data:

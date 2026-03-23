@@ -19,5 +19,5 @@ class ChangeFeedListener:
             while True:
                 async for item in change_feed:
                     news_id = item["id"]
-                    await producer.publish(news_id)
+                    await producer.publish(news_id, partition_key=item.get("id"))
                 await asyncio.sleep(1)

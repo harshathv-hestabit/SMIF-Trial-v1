@@ -10,6 +10,9 @@
             "PartitionCount": "4",
             "ConsumerGroups": [
               {
+                "Name": "DISPATCH"
+              },
+              {
                 "Name": "MAS"
               }
             ]

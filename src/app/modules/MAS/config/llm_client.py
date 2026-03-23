@@ -99,11 +99,11 @@ def get_llm():
 
     if _llm_client is None:
         _llm_client = LLMClient(
-            model="openai/gpt-oss-120b",
+            model="moonshotai/kimi-k2-instruct",
             api_key=settings.GROQ_API_KEY,
             provider="openai",
             rpm=30,
-            concurrency=1,
+            concurrency=2,
             base_url=settings.GROQ_BASE_URL,
             temperature=0.3,
         )

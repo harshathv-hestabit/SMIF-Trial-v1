@@ -6,3 +6,4 @@ news_raw
 index_dump.json
 portfolio.csv
 .vscode
+local.settings.json

@@ -1,42 +1,55 @@
-import json
 import asyncio
-import random
+import logging
 
-from azure.eventhub import EventData
+from .config import AsyncServiceBusPublisher, decode_message_body, run_indexing, settings
+from .workflow.generate_insight import InsightState, build_insight_graph
+from .workflow.hnw import HNWState, build_hnw_graph
+from .workflow.standard import StandardState, build_standard_graph
 
-from .config import EventConsumer,ensure_checkpoint_container,run_indexing
-from .workflow.hnw import build_hnw_graph, HNWState
-from .workflow.standard import build_standard_graph, StandardState
-from .workflow.generate_insight import build_insight_graph, InsightState
 
-WORKFLOW_SEM = asyncio.Semaphore(2)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
+)
+logging.getLogger("azure").setLevel(logging.WARNING)
+logger = logging.getLogger(__name__)
 
-hnw_graph      = build_hnw_graph()
+
+hnw_graph = build_hnw_graph()
 standard_graph = build_standard_graph()
-insight_graph  = build_insight_graph()
+insight_graph = build_insight_graph()
+
 
 async def run_hnw_workflow(event_body: dict) -> dict:
-    print("[Orchestrator] Starting HNW Client Workflow")
+    logger.info(
+        "workflow_started workflow=hnw news_doc_id=%s partition_key=%s",
+        event_body.get("news_doc_id"),
+        event_body.get("partition_key"),
+    )
     initial_state: HNWState = {
         "event_data": event_body,
         "news_doc": None,
         "relevance_results": {},
         "candidate_clients": [],
+        "client_documents": {},
         "generate_insight_events": [],
     }
-
-    print(f"\n Initial State: {initial_state}\n")
     result = await asyncio.to_thread(hnw_graph.invoke, initial_state)
-
-    print(
-        f"[Orchestrator] HNW complete — "
-        f"{len(result['generate_insight_events'])} insight events queued"
+    logger.info(
+        "workflow_completed workflow=hnw news_doc_id=%s generated_events=%s",
+        event_body.get("news_doc_id"),
+        len(result["generate_insight_events"]),
     )
-
     return result
 
-async def run_standard_workflow(event_body: dict):
-    print("[Orchestrator] Starting Standard Client Workflow")
+
+async def run_standard_workflow(event_body: dict) -> dict:
+    logger.info(
+        "workflow_started workflow=standard job_id=%s checkpoint_start=%s checkpoint_end=%s",
+        event_body.get("job_id"),
+        event_body.get("checkpoint_start"),
+        event_body.get("checkpoint_end"),
+    )
     initial_state: StandardState = {
         "trigger_event": event_body,
         "news_batch": [],
@@ -44,18 +57,20 @@ async def run_standard_workflow(event_body: dict):
         "relevance_map": [],
         "generate_insight_events": [],
     }
-
     result = await asyncio.to_thread(standard_graph.invoke, initial_state)
-    print(
-        f"[Orchestrator] Standard complete — "
-        f"{len(result['generate_insight_events'])} insight events queued"
+    logger.info(
+        "workflow_completed workflow=standard job_id=%s generated_events=%s",
+        event_body.get("job_id"),
+        len(result["generate_insight_events"]),
     )
     return result
 
-async def run_generate_insight_workflow(event_body: dict):
-    print(
-        f"[Orchestrator] Starting Generate Insight Workflow "
-        f"for client {event_body.get('client_id')}"
+
+async def run_generate_insight_workflow(event_body: dict) -> dict:
+    logger.info(
+        "workflow_started workflow=generate_insight client_id=%s news_doc_id=%s",
+        event_body.get("client_id"),
+        event_body.get("news_doc_id"),
     )
     initial_state: InsightState = {
         "client_id": event_body.get("client_id", "unknown"),
@@ -67,86 +82,147 @@ async def run_generate_insight_workflow(event_body: dict):
         "iterations": 0,
         "status": "pending",
     }
-
     result = await insight_graph.ainvoke(initial_state)
-    print(
-        f"[Orchestrator] Insight complete — "
-        f"status={result['status']} score={result['verification_score']}"
+    logger.info(
+        "workflow_completed workflow=generate_insight client_id=%s news_doc_id=%s status=%s score=%s",
+        event_body.get("client_id"),
+        event_body.get("news_doc_id"),
+        result["status"],
+        result["verification_score"],
     )
-
     return result
 
 
-EVENT_TYPE_HANDLERS = {
-    "realtime_news":    run_hnw_workflow,
-    "delayed_news":     run_standard_workflow,
-    "generate_insight": run_generate_insight_workflow,
+QUEUE_WORKFLOWS = {
+    settings.QUEUE_REALTIME_NEWS: {
+        "workflow_name": "hnw",
+        "expected_event_type": "realtime_news",
+        "handler": run_hnw_workflow,
+        "concurrency": settings.REALTIME_WORKFLOW_CONCURRENCY,
+    },
+    settings.QUEUE_STANDARD_NEWS: {
+        "workflow_name": "standard",
+        "expected_event_type": "standard_news",
+        "handler": run_standard_workflow,
+        "concurrency": settings.STANDARD_WORKFLOW_CONCURRENCY,
+    },
+    settings.QUEUE_GENERATE_INSIGHT: {
+        "workflow_name": "generate_insight",
+        "expected_event_type": "generate_insight",
+        "handler": run_generate_insight_workflow,
+        "concurrency": settings.GENERATE_INSIGHT_CONCURRENCY,
+    },
 }
 
-def route_event(event_type: str, event_body: dict):
-    handler = EVENT_TYPE_HANDLERS.get(event_type)
-    if not handler:
-        print(f"[Orchestrator] Unknown event_type '{event_type}' — skipping")
-        return
 
-    async def wrapped():
-        async with WORKFLOW_SEM:
-            await asyncio.sleep(random.uniform(0.2, 2.0))
-            return await handler(event_body)
+def normalize_event_type(queue_name: str, event_body: dict) -> str:
+    raw_event_type = str(event_body.get("event_type", "")).strip().lower()
+    if raw_event_type == "delayed_news":
+        return "standard_news"
+    if raw_event_type:
+        return raw_event_type
+    return str(QUEUE_WORKFLOWS[queue_name]["expected_event_type"])
 
-    task = asyncio.create_task(wrapped())
-    task.add_done_callback(
-        lambda t: print(f"[Orchestrator] Task error: {t.exception()}")
-        if not t.cancelled() and t.exception()
-        else None
-    )
 
-async def process_event(partition_context, event: EventData):
+async def handle_queue_message(
+    queue_name: str,
+    receiver,
+    message,
+    semaphore: asyncio.Semaphore,
+) -> None:
+    config = QUEUE_WORKFLOWS[queue_name]
+    workflow_name = str(config["workflow_name"])
+
     try:
-        properties = event.properties or {}
-        raw = (
-            properties.get(b"event_type")
-            or properties.get("event_type")
-            or b"unknown"
-        )
+        event_body = decode_message_body(message)
+        event_type = normalize_event_type(queue_name, event_body)
 
-        event_type = (
-            raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
-        )
+        if event_type != config["expected_event_type"]:
+            raise ValueError(
+                f"queue={queue_name} expected event_type="
+                f"{config['expected_event_type']} but received {event_type}"
+            )
 
-        body_bytes = event.body_as_str(encoding="utf-8")
-        event_body = json.loads(body_bytes) if body_bytes else {}
-
-        print(
-            f"[EventHub] partition={partition_context.partition_id} "
-            f"| event_type={event_type} | offset={event.offset}"
-        )
-
-        route_event(event_type, event_body)
-        await partition_context.update_checkpoint(event)
-
+        await config["handler"](event_body)
+        await receiver.complete_message(message)
     except Exception as exc:
-        print(f"[EventHub] Error processing event: {exc}")
+        delivery_count = int(getattr(message, "delivery_count", 1))
+        if delivery_count >= settings.SERVICEBUS_MAX_DELIVERY_ATTEMPTS:
+            await receiver.dead_letter_message(
+                message,
+                reason="workflow_failed",
+                error_description=str(exc)[:1024],
+            )
+            logger.exception(
+                "message_dead_lettered queue=%s workflow=%s message_id=%s delivery_count=%s error=%s",
+                queue_name,
+                workflow_name,
+                message.message_id,
+                delivery_count,
+                exc,
+            )
+        else:
+            await receiver.abandon_message(message)
+            logger.exception(
+                "message_abandoned queue=%s workflow=%s message_id=%s delivery_count=%s error=%s",
+                queue_name,
+                workflow_name,
+                message.message_id,
+                delivery_count,
+                exc,
+            )
+    finally:
+        semaphore.release()
 
-async def main():
-    print("[Orchestrator] Initializing EventHub consumer...")
-    await ensure_checkpoint_container()
 
-    consumer = EventConsumer()
-    client = consumer.client()
+async def consume_queue(
+    bus_client: AsyncServiceBusPublisher,
+    queue_name: str,
+    semaphore: asyncio.Semaphore,
+) -> None:
+    in_flight: set[asyncio.Task] = set()
 
-    async with client:
-        await client.receive(
-            on_event=process_event,
-            on_partition_initialize=None,
-            on_partition_close=None,
-            on_error=None,
-            starting_position="-1",
+    async with bus_client.get_queue_receiver(queue_name=queue_name) as receiver:
+        while True:
+            await semaphore.acquire()
+
+            messages = await receiver.receive_messages(
+                max_message_count=1,
+                max_wait_time=5,
+            )
+            if not messages:
+                semaphore.release()
+                continue
+
+            task = asyncio.create_task(
+                handle_queue_message(
+                    queue_name=queue_name,
+                    receiver=receiver,
+                    message=messages[0],
+                    semaphore=semaphore,
+                )
+            )
+            in_flight.add(task)
+            task.add_done_callback(in_flight.discard)
+
+
+async def main() -> None:
+    logger.info("mas_startup queues=%s", list(QUEUE_WORKFLOWS.keys()))
+    async with AsyncServiceBusPublisher(settings.SERVICEBUS_CONNECTION_STRING) as bus_client:
+        semaphores = {
+            queue_name: asyncio.Semaphore(int(config["concurrency"]))
+            for queue_name, config in QUEUE_WORKFLOWS.items()
+        }
+        await asyncio.gather(
+            *[
+                consume_queue(bus_client, queue_name, semaphores[queue_name])
+                for queue_name in QUEUE_WORKFLOWS
+            ]
         )
+
 
 if __name__ == "__main__":
-    print("Starting Multi Agent System...")
-    print("Indexing Clients first...")
+    logger.info("mas_indexing_start")
     asyncio.run(run_indexing())
-    print("Indexing complete. Multi Agent System is now live!")
+    logger.info("mas_indexing_complete")
     asyncio.run(main())

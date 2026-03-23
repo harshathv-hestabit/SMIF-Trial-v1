@@ -13,6 +13,7 @@ azure-eventhub==5.15.1
 azure-eventhub-checkpointstoreblob-aio==1.2.0
 azure-functions==1.24.0
 azure-identity==1.19.0
+azure-servicebus==7.14.2
 azure-storage-blob==12.28.0
 azurefunctions-extensions-base==1.1.0
 azurefunctions-extensions-bindings-cosmosdb==1.0.0b1

@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/__init__.py ./app/__init__.py
 COPY app/modules/__init__.py ./app/modules/__init__.py
 COPY app/modules/MAS ./app/modules/MAS
+COPY app/common ./app/common
 
 EXPOSE 8502
 

@@ -1,296 +1,239 @@
 # SMIF
 
-Event-driven market insight pipeline with two application modules:
+SMIF is an event-driven market insight system with three active runtime pieces:
 
-- `DPS` ingests raw news JSON, transforms it, stores it in Cosmos DB, and emits realtime events.
-- `MAS` indexes client portfolios, matches news to clients, generates insights, verifies them, and stores the resulting insight documents.
+- `DPS` ingests and transforms market news, stores it in Cosmos DB, and emits Event Hub events.
+- `dispatch_realtime_eventhub_to_servicebus` is an Azure Functions bridge that reads Event Hub batches and republishes them to Service Bus queues.
+- `MAS` consumes Service Bus events, matches news against client portfolios, generates insights, verifies them, and stores the results.
 
-The project is designed to run locally with Azure emulators plus Elasticsearch through Docker Compose.
+The local development stack uses Azure emulators plus Elasticsearch through Docker Compose.
+
+## Architecture
+
+```text
+DPS
+  -> Cosmos DB news container
+  -> Event Hub: news-processed
+  -> Azure Function: dispatch_realtime_eventhub_to_servicebus
+  -> Service Bus queues
+     - realtime-news-events
+     - standard-news-events
+     - generate-insight-events
+  -> MAS workers
+  -> Cosmos DB insights container
+```
+
+Event routing is based on `event_type`:
+
+- `realtime_news` -> `QUEUE_REALTIME_NEWS`
+- `standard_news` -> `QUEUE_STANDARD_NEWS`
+- `generate_insight` -> `QUEUE_GENERATE_INSIGHT`
+
+The queue topology for the Service Bus emulator is defined in [src/app/common/servicebus-config.json](/home/harshathvenkastesh/Desktop/SMIF/src/app/common/servicebus-config.json).
 
 ## Repository Layout
 
 ```text
+README.md
 src/
   docker-compose.yaml
   requirements.txt
-  .env.example
+  host.json
+  local.settings.json.example
+  dispatch_realtime_eventhub_to_servicebus/
+    __init__.py
+    function.json
   app/
+    common/
+      eventhub-config.json
+      servicebus-config.json
+      service_bus.py
     modules/
       DPS/
-        streamlit_app.py
-        pipeline.py
-        services/change_feed_service.py
-        news_raw/
       MAS/
-        __main__.py
-        ui/main.py
-        workflow/
-        agents/
-        config/
 ```
 
-## Current Architecture
-
-```text
-DPS Streamlit UI
-  -> pipeline
-  -> transform raw news
-  -> Cosmos DB news container
-  -> Cosmos change feed listener
-  -> Event Hub event: realtime_news
-  -> MAS consumer
-  -> HNW workflow
-  -> Elasticsearch client matching
-  -> Event Hub event: generate_insight
-  -> Insight generation + verification graph
-  -> Cosmos DB insights container
-  -> MAS Streamlit UI
-```
-
-## Services
+## Components
 
 ### DPS
 
-Main files:
+Relevant files:
 
-- [src/app/modules/DPS/streamlit_app.py](./src/app/modules/DPS/streamlit_app.py)
-- [src/app/modules/DPS/pipeline.py](./src/app/modules/DPS/pipeline.py)
-- [src/app/modules/DPS/services/change_feed_service.py](./src/app/modules/DPS/services/change_feed_service.py)
+- [src/app/modules/DPS/streamlit_app.py](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/DPS/streamlit_app.py)
+- [src/app/modules/DPS/pipeline.py](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/DPS/pipeline.py)
+- [src/app/modules/DPS/services/change_feed_service.py](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/DPS/services/change_feed_service.py)
+- [src/app/modules/DPS/services/standard_event_service.py](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/DPS/services/standard_event_service.py)
 
-Current behavior:
+Current role:
 
-- Streamlit UI accepts uploaded JSON files or runs the sample documents in `news_raw/`.
-- `pipeline.py` transforms each raw article into the internal news document schema and upserts it into Cosmos DB.
-- Each pipeline run writes a timestamped log file under `src/app/modules/DPS/logs/`.
-- `python -m app.modules.DPS` runs the change-feed listener, which watches the Cosmos news container and publishes `realtime_news` events to Event Hub.
+- Accepts raw news input through the Streamlit UI.
+- Transforms input documents into the internal news schema.
+- Writes processed news into Cosmos DB.
+- Publishes downstream events for the rest of the pipeline.
 
-Transformed news documents include:
+### Event Hub -> Service Bus bridge
 
-- `id`
-- `type`
-- `title`
-- `content`
-- `link`
-- `symbols`
-- `tags`
-- `sentiment`
-- `source`
-- `published_at`
-- `fetched_at`
-- `query_symbol`
-- `processed_at`
+Relevant files:
+
+- [src/dispatch_realtime_eventhub_to_servicebus/__init__.py](/home/harshathvenkastesh/Desktop/SMIF/src/dispatch_realtime_eventhub_to_servicebus/__init__.py)
+- [src/dispatch_realtime_eventhub_to_servicebus/function.json](/home/harshathvenkastesh/Desktop/SMIF/src/dispatch_realtime_eventhub_to_servicebus/function.json)
+- [src/app/common/service_bus.py](/home/harshathvenkastesh/Desktop/SMIF/src/app/common/service_bus.py)
+- [src/local.settings.json.example](/home/harshathvenkastesh/Desktop/SMIF/src/local.settings.json.example)
+
+Current role:
+
+- Runs as a Python Azure Function with an `eventHubTrigger`.
+- Reads batched events from `%EVENTHUB_NAME%`.
+- Maps each event by `event_type` to a Service Bus queue.
+- Rebuilds the payload with transport metadata such as `created_at`, `source`, and `queue_name`.
+- Publishes with a small retry loop before surfacing a failure.
 
 ### MAS
 
-Main files:
+Relevant files:
 
-- [src/app/modules/MAS/__main__.py](./src/app/modules/MAS/__main__.py)
-- [src/app/modules/MAS/config/search.py](./src/app/modules/MAS/config/search.py)
-- [src/app/modules/MAS/workflow/hnw.py](./src/app/modules/MAS/workflow/hnw.py)
-- [src/app/modules/MAS/workflow/generate_insight.py](./src/app/modules/MAS/workflow/generate_insight.py)
-- [src/app/modules/MAS/ui/main.py](./src/app/modules/MAS/ui/main.py)
+- [src/app/modules/MAS/__main__.py](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/MAS/__main__.py)
+- [src/app/modules/MAS/workflow/hnw.py](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/MAS/workflow/hnw.py)
+- [src/app/modules/MAS/workflow/standard.py](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/MAS/workflow/standard.py)
+- [src/app/modules/MAS/workflow/generate_insight.py](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/MAS/workflow/generate_insight.py)
+- [src/app/modules/MAS/ui/main.py](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/MAS/ui/main.py)
 
-Current behavior:
+Current role:
 
-- On startup, MAS runs client indexing before it starts consuming Event Hub events.
-- Client portfolios are built from `config/portfolio.csv`.
-- ISINs are mapped to tickers through OpenFIGI and cached in `config/isin_to_ticker.json`.
-- Client profiles are embedded with Google embeddings (`models/gemini-embedding-001`) and indexed in Elasticsearch.
-- Enriched client portfolio documents are also persisted to Cosmos DB.
-- MAS consumes Event Hub events and routes them by `event_type`.
-- `realtime_news` currently triggers the HNW workflow.
-- The HNW workflow fetches the news document from Cosmos, scores it against indexed client portfolios, fetches matched client documents, and emits `generate_insight` events.
-- The insight workflow generates an insight draft, verifies it, and persists the result to the Cosmos insights container.
-- The MAS Streamlit UI shows insights by `client_id`.
-
-## UIs
-
-### DPS UI
-
-- Title: `Smart Market Insight Feed`
-- Entry: [src/app/modules/DPS/streamlit_app.py](./src/app/modules/DPS/streamlit_app.py)
-- Default port in Docker: `8501`
-
-### MAS UI
-
-- Title: `SMIF Clients`
-- Entry: [src/app/modules/MAS/ui/main.py](./src/app/modules/MAS/ui/main.py)
-- Default port in Docker: `8502`
-- Loads available clients from Cosmos and displays all stored insights for the selected client
+- Builds and indexes client portfolio data.
+- Consumes Service Bus queue messages for realtime, standard, and insight-generation workflows.
+- Matches relevant news to client portfolios.
+- Generates and verifies insight documents.
+- Stores client insights in Cosmos DB and exposes them through the Streamlit UI.
 
 ## Local Infrastructure
 
-[src/docker-compose.yaml](./src/docker-compose.yaml) defines:
+[src/docker-compose.yaml](/home/harshathvenkastesh/Desktop/SMIF/src/docker-compose.yaml) starts:
 
-- `azurite` for Event Hub checkpoint storage
+- `azurite` for Azure Storage and checkpointing
 - `cosmos` for the Cosmos DB emulator
 - `eventhub` for the Event Hubs emulator
-- `elasticsearch` for client profile indexing and retrieval
-- `dps` for the DPS listener + Streamlit UI
-- `mas` for the MAS consumer + Streamlit UI
+- `servicebus-emulator` plus `mssql` for Service Bus queues
+- `elasticsearch` for search and client matching
+- `dps` for the DPS app and UI
+- `mas` for the MAS workers and UI
 
-Both application images install dependencies from the shared [src/requirements.txt](./src/requirements.txt).
-
-## Running With Docker
-
-Run these commands from `src/`:
-
-```bash
-docker compose up --build
-```
-
-Useful endpoints:
+Default local ports:
 
 - DPS UI: `http://localhost:8501`
 - MAS UI: `http://localhost:8502`
 - Elasticsearch: `http://localhost:9200`
 - Cosmos emulator: `https://localhost:8081`
+- Azurite Blob: `http://127.0.0.1:10000`
+- Event Hubs AMQP: `127.0.0.1:5672`
+- Service Bus AMQP: `127.0.0.2:5672`
+- Service Bus management API: `http://127.0.0.2:5300`
 
-To reset everything, including emulator and Elasticsearch data:
+## Run With Docker
+
+Work from [src](/home/harshathvenkastesh/Desktop/SMIF/src):
+
+```bash
+docker compose up --build
+```
+
+To stop and remove persisted local emulator data:
 
 ```bash
 docker compose down -v
 ```
 
-## Running Locally
+## Run Locally
 
-Create a virtual environment, install shared dependencies, and work from `src/`:
+Create a virtual environment and install dependencies from [src/requirements.txt](/home/harshathvenkastesh/Desktop/SMIF/src/requirements.txt):
 
 ```bash
-python3 -m venv demo
-source demo/bin/activate
+cd src
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run DPS Streamlit:
+### 1. Start local infrastructure
+
+```bash
+docker compose up azurite cosmos eventhub servicebus-emulator mssql elasticsearch
+```
+
+### 2. Configure local settings
+
+Copy [src/local.settings.json.example](/home/harshathvenkastesh/Desktop/SMIF/src/local.settings.json.example) to `src/local.settings.json` and update values if your local setup differs.
+
+For the Azure Functions bridge, the required settings are:
+
+- `AzureWebJobsStorage`
+- `FUNCTIONS_WORKER_RUNTIME`
+- `EVENTHUB_NAME`
+- `EVENTHUB_CONNECTION_STRING`
+- `EVENTHUB_CONSUMER_GROUP`
+- `SERVICEBUS_CONNECTION_STRING`
+- `QUEUE_REALTIME_NEWS`
+- `QUEUE_STANDARD_NEWS`
+- `QUEUE_GENERATE_INSIGHT`
+
+For DPS and MAS application settings, use [src/.env.example](/home/harshathvenkastesh/Desktop/SMIF/src/.env.example) as the baseline.
+
+### 3. Start the bridge function
+
+From `src/`, run the Azure Functions host:
+
+```bash
+func start
+```
+
+This loads [src/host.json](/home/harshathvenkastesh/Desktop/SMIF/src/host.json) and the function under [src/dispatch_realtime_eventhub_to_servicebus](/home/harshathvenkastesh/Desktop/SMIF/src/dispatch_realtime_eventhub_to_servicebus).
+
+### 4. Start DPS and MAS
+
+Run DPS:
 
 ```bash
 streamlit run app/modules/DPS/streamlit_app.py
 ```
 
-Run MAS service:
+Run MAS workers:
 
 ```bash
 python -m app.modules.MAS
 ```
 
-Run MAS UI separately:
+Run the MAS UI separately if needed:
 
 ```bash
-streamlit run app/modules/MAS/ui/main.py
+streamlit run app/modules/MAS/ui/main.py --server.port 8502
 ```
 
-Run the DPS change-feed listener:
+## Configuration
 
-```bash
-python -m app.modules.DPS
-```
+### Shared transport settings
 
-## Environment Variables
+The shared transport helpers live in [src/app/common/service_bus.py](/home/harshathvenkastesh/Desktop/SMIF/src/app/common/service_bus.py).
 
-The application settings are defined in:
+The emulator topologies live in:
 
-- [src/app/modules/DPS/config/settings.py](./src/app/modules/DPS/config/settings.py)
-- [src/app/modules/MAS/config/settings.py](./src/app/modules/MAS/config/settings.py)
+- [src/app/common/eventhub-config.json](/home/harshathvenkastesh/Desktop/SMIF/src/app/common/eventhub-config.json)
+- [src/app/common/servicebus-config.json](/home/harshathvenkastesh/Desktop/SMIF/src/app/common/servicebus-config.json)
 
-The example file is:
+### Application environment variables
 
-- [src/.env.example](./src/.env.example)
+[src/.env.example](/home/harshathvenkastesh/Desktop/SMIF/src/.env.example) currently includes:
 
-Required variables from code:
+- Cosmos DB settings
+- Event Hub settings
+- Service Bus settings
+- Queue names and workflow concurrency controls
+- Azure Storage checkpoint settings
+- Elasticsearch URL
+- LLM/API credentials such as `GROQ_API_KEY`, `GOOGLE_API_KEY`, `EODHD_API_KEY`, and `HF_TOKEN`
 
-- `GROQ_API_KEY`
-- `GROQ_BASE_URL`
-- `COSMOS_URL`
-- `COSMOS_KEY`
-- `COSMOS_DB`
-- `NEWS_CONTAINER`
-- `NEWS_CONTAINER_PARTITION_ID`
-- `CLIENT_PORTFOLIO_CONTAINER`
-- `CLIENT_PORTFOLIO_CONTAINER_PARTITION_ID`
-- `INSIGHTS_CONTAINER`
-- `INSIGHTS_CONTAINER_PARTITION_ID`
-- `EVENTHUB_NAME`
-- `EVENTHUB_CONNECTION_STRING`
-- `CHECKPOINT_CONTAINER`
-- `AZURE_STORAGE_ACCOUNT`
-- `AZURE_STORAGE_KEY`
-- `AZURE_STORAGE_CONNECTION_STRING`
-- `EODHD_API_KEY`
-- `HF_TOKEN`
-- `GOOGLE_API_KEY`
-- `ELASTICSEARCH_URL`
+## Notes
 
-Note:
-
-- `src/.env.example` is currently incomplete relative to the settings classes. `GOOGLE_API_KEY` and `ELASTICSEARCH_URL` are required by MAS even though they are not present in the example file.
-
-## Data Sources and Storage
-
-### News Input
-
-- Raw sample articles live in [src/app/modules/DPS/news_raw](./src/app/modules/DPS/news_raw)
-- Additional raw news can be fetched using [src/app/sample_insert.py](./src/app/sample_insert.py)
-
-### Client Data
-
-- Raw client portfolio CSV: [src/app/modules/MAS/config/portfolio.csv](./src/app/modules/MAS/config/portfolio.csv)
-- Cached ISIN to ticker mapping: [src/app/modules/MAS/config/isin_to_ticker.json](./src/app/modules/MAS/config/isin_to_ticker.json)
-
-### Cosmos Containers
-
-Expected containers:
-
-- news
-- client portfolio
-- insights
-
-Container names and partition keys are driven by environment variables.
-
-## Search and Matching
-
-Client matching is implemented in [src/app/modules/MAS/config/search.py](./src/app/modules/MAS/config/search.py).
-
-Current approach:
-
-- generate client profile embeddings with `gemini-embedding-001`
-- generate query embeddings for incoming news
-- run Elasticsearch KNN search on the dense vector
-- run a parallel lexical query using ticker and tag overlap
-- fuse the two result sets with reciprocal rank fusion
-
-This module also:
-
-- creates the `clients` Elasticsearch index
-- enriches client profiles with ticker symbols before persistence
-- writes client portfolio documents to Cosmos after enrichment
-
-## Known Limitations
-
-These are current codebase limitations, not planned behavior:
-
-- MAS startup is coupled to successful client indexing. If OpenFIGI lookup fails and the cache is incomplete, MAS startup fails.
-- The insight generation prompts are still rough. The generator currently injects `news["symbols"]` into the `Content` section, and the verifier still expects `news["tickers"]` / `portfolio["holdings"]`, which do not fully align with the current stored document shapes.
-- DPS pipeline failure handling still fails the whole run on an upsert exception.
-- Cosmos connections run with certificate verification disabled for emulator compatibility.
-- `docker compose down -v` removes Elasticsearch data, so MAS must rebuild the client index on the next startup.
-
-## Current Status
-
-What is working now:
-
-- Dockerized local stack with Azure emulators and Elasticsearch
-- DPS Streamlit ingestion flow
-- Cosmos-backed change-feed listener
-- Event Hub fan-out from DPS to MAS
-- Client profile construction and Elasticsearch indexing
-- Google-embedding-based client matching
-- Insight persistence to Cosmos
-- MAS Streamlit insight viewer by client
-
-What is still evolving:
-
-- standard-client workflow depth
-- prompt quality and verifier accuracy
-- OpenFIGI failure handling and startup resilience
-- more robust DPS pipeline retry / partial-failure handling
+- `local.settings.json` is for the Azure Functions host.
+- `.env` or `.env.docker` is for DPS and MAS application configuration.
+- The Service Bus emulator requires SQL Server; both are wired together in Docker Compose.
+- The bridge currently supports `realtime_news`, `standard_news`, and `generate_insight` events only.

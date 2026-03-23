@@ -1,6 +1,8 @@
 from typing import TypedDict, List
 from langgraph.graph import StateGraph, END
 
+from ..util import EventExecutor
+
 class StandardState(TypedDict):
     trigger_event: dict            # scheduled job metadata
     news_batch: List[dict]         # accumulated news from data lake
@@ -46,10 +48,34 @@ def map_relevance(state: StandardState) -> StandardState:
 
 def create_insight_events(state: StandardState) -> StandardState:
     state["generate_insight_events"] = [
-        {"client_id": p["client_id"], "news_event": p["news"], "priority": "batch"}
+        {
+            "client_id": p["client_id"],
+            "client_name": p["client_id"],
+            "news_doc_id": p["news"]["id"],
+            "news_title": p["news"]["title"],
+            "news_document": p["news"],
+            "client_portfolio_document": next(
+                (
+                    portfolio
+                    for portfolio in state["client_portfolios"]
+                    if portfolio["client_id"] == p["client_id"]
+                ),
+                {},
+            ),
+            "relevance_score": p["score"],
+            "matched_isins": p["news"].get("tickers", []),
+            "matched_tags": p["news"].get("tags", []),
+            "priority": "scheduled",
+            "source": "mas.standard_workflow",
+        }
         for p in state["relevance_map"]
     ]
     print(f"[Standard] Created {len(state['generate_insight_events'])} insight events")
+
+    if state["generate_insight_events"]:
+        with EventExecutor() as executor:
+            executor.publish_insight_events(state["generate_insight_events"])
+
     return state
 
 def build_standard_graph() -> StateGraph:

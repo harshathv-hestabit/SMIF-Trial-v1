@@ -1,8 +1,14 @@
+import json
+import logging
+
 from azure.eventhub import EventData
 from azure.eventhub.aio import EventHubProducerClient
+
 from .settings import settings
 
-import json
+
+logger = logging.getLogger(__name__)
+logging.getLogger("azure.eventhub").setLevel(logging.WARNING)
 
 class EventProducer:
     def __init__(self):        
@@ -18,16 +24,16 @@ class EventProducer:
         await self.producer.close()
         return False
     
-    async def publish(self, news_id: str):
-        print(f"Change detected: {news_id}")
+    async def publish(self, news_id: str, partition_key: str | None = None):
+        logger.info("realtime_eventhub_publish news_doc_id=%s", news_id)
         payload = json.dumps({
+            "event_type": "realtime_news",
             "news_doc_id": news_id,
-            "partition_key": news_id
+            "partition_key": partition_key or news_id,
         }).encode("utf-8")
 
         event = EventData(payload)
         event.properties = {
             "event_type": "realtime_news"
         }
-        print(f"\nEVENT: {event}\n")
         await self.producer.send_event(event)
