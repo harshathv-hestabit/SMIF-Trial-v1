@@ -9,6 +9,7 @@
 
 v1.1 planned flow for DPS module:
 
+``` mermaid
 flowchart LR
     subgraph Source Layer
         NP[News Poller.py\nBronze News Input]
@@ -44,6 +45,7 @@ flowchart LR
     CFS -->|processed event| EMD
     EMD --> SB
     SB --> MAS
+  ```
 
 ## Description
 
