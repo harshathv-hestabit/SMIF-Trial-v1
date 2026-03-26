@@ -71,7 +71,7 @@ DPS Streamlit UI
   -> Service Bus queue: realtime-news-events
 
 DPS standard event publisher
-  -> Service Bus queue: standard-news-events
+  -> Service Bus queue: delayed-news-events
 
 MAS queue consumers
   -> HNW workflow for realtime_news
@@ -85,7 +85,7 @@ MAS queue consumers
 Current routing behavior:
 
 - `realtime_news` travels through Event Hub and is bridged into `realtime-news-events` queue.
-- `standard_news` is published directly to `standard-news-events` queue.
+- `standard_news` is published directly to `delayed-news-events` queue.
 - `generate_insight` is published directly to `generate-insight-events` queue.
 
 Shared queue definitions live in [src/app/common/servicebus-config.json](/home/harshathvenkastesh/Desktop/SMIF/src/app/common/servicebus-config.json).
@@ -167,7 +167,7 @@ Relevant files:
 Current role:
 
 - Builds and indexes client portfolio data at startup.
-- Consumes `realtime-news-events`, `standard-news-events`, and `generate-insight-events`.
+- Consumes `realtime-news-events`, `delayed-news-events`, and `generate-insight-events`.
 - Runs the HNW workflow for `realtime_news`.
 - Runs the standard workflow for `standard_news`.
 - Runs the insight generation and verification workflow for `generate_insight`.

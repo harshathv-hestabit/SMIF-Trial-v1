@@ -3,12 +3,15 @@
   "Values": {
     "AzureWebJobsStorage": "DefaultEndpointsProtocol=http;AccountName=mylocalaccount;AccountKey=bXlsb2NhbHNlY3JldGtleTEyMw==;BlobEndpoint=http://127.0.0.1:10000/mylocalaccount;QueueEndpoint=http://127.0.0.1:10001/mylocalaccount;TableEndpoint=http://127.0.0.1:10002/mylocalaccount;",
     "FUNCTIONS_WORKER_RUNTIME": "python",
-    "EVENTHUB_NAME": "news-processed",
-    "EVENTHUB_CONNECTION_STRING": "Endpoint=sb://127.0.0.1;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;",
-    "EVENTHUB_CONSUMER_GROUP": "DISPATCH",
+    "COSMOS_DB_CONNECTION_STRING": "AccountEndpoint=https://<account>.documents.azure.com:443/;AccountKey=<key>;",
+    "COSMOS_DB": "smif",
+    "NEWS_CONTAINER": "news",
+    "CHANGE_FEED_LEASE_CONTAINER": "news-change-feed-leases",
     "SERVICEBUS_CONNECTION_STRING": "Endpoint=sb://127.0.0.2;SharedAccessKeyName=RootManageSharedAccessKey;SharedAccessKey=SAS_KEY_VALUE;UseDevelopmentEmulator=true;",
     "QUEUE_REALTIME_NEWS": "realtime-news-events",
-    "QUEUE_STANDARD_NEWS": "standard-news-events",
-    "QUEUE_GENERATE_INSIGHT": "generate-insight-events"
+    "QUEUE_DELAYED_NEWS": "delayed-news-events",
+    "QUEUE_GENERATE_INSIGHT": "generate-insight-events",
+    "STANDARD_TRIGGER_SCHEDULE": "0 0 * * * *",
+    "STANDARD_TRIGGER_DELAY_MINUTES": "15"
   }
 }

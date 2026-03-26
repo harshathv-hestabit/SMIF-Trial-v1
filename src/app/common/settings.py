@@ -2,8 +2,8 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field
 from pathlib import Path
 
-_ENV_PATH = Path(__file__).resolve().parents[4] / ".env"
-
+_ENV_PATH = Path(__file__).resolve().parents[2] / ".env"
+print(_ENV_PATH)
 if not _ENV_PATH.exists():
     raise FileNotFoundError(
         f"[Settings] .env file not found at {_ENV_PATH}\n"
@@ -14,12 +14,6 @@ if not _ENV_PATH.exists():
 class Settings(BaseSettings):
     GROQ_BASE_URL: str = Field(..., description="Groq API base URL")
     GROQ_API_KEY: str = Field(..., description="Groq API key")
-    GOOGLE_API_KEY: str = Field(..., description="Gemini API key")
-    CLIENT_PORTFOLIO_SOURCE_PATH: str = Field(
-        default="",
-        description="Optional path to the client portfolio CSV source file",
-    )
-    ELASTICSEARCH_URL: str = Field(..., description="Elastic Search endpoint")
 
     COSMOS_URL: str = Field(..., description="Cosmos DB endpoint")
     COSMOS_KEY: str = Field(..., description="Cosmos DB key")
@@ -33,7 +27,6 @@ class Settings(BaseSettings):
 
     EVENTHUB_NAME: str = Field(..., description="Event Hub name")
     EVENTHUB_CONNECTION_STRING: str = Field(..., description="Event Hub Connection String")
-    CHECKPOINT_CONTAINER: str = Field("eventhub-checkpoints", description="Event Hub checkpoint container")
     AZURE_STORAGE_ACCOUNT: str = Field(..., description="Storage account name")
     AZURE_STORAGE_KEY: str = Field(..., description="Storage account key")
     AZURE_STORAGE_CONNECTION_STRING: str = Field(..., description="Storage connection string")
@@ -46,6 +39,8 @@ class Settings(BaseSettings):
     GENERATE_INSIGHT_CONCURRENCY: int = Field(1, description="Concurrent generate insight executions")
     SERVICEBUS_MAX_DELIVERY_ATTEMPTS: int = Field(5, description="Dead-letter after this many delivery attempts")
 
+    BENZINGA_API_KEY: str = Field(..., description="BENZINGA API key")
+    
     model_config = SettingsConfigDict(
         env_file=_ENV_PATH,
         env_file_encoding="utf-8",

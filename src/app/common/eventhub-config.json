@@ -10,10 +10,16 @@
             "PartitionCount": "4",
             "ConsumerGroups": [
               {
-                "Name": "DISPATCH"
-              },
-              {
                 "Name": "MAS"
+              }
+            ]
+          },
+          {
+            "Name": "news-stream",
+            "PartitionCount": "4",
+            "ConsumerGroups": [
+              {
+                "Name": "DPS"
               }
             ]
           }

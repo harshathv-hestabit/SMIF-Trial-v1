@@ -19,7 +19,7 @@
             }
           },
           {
-            "Name": "standard-news-events",
+            "Name": "delayed-news-events",
             "Properties": {
               "DeadLetteringOnMessageExpiration": false,
               "DefaultMessageTimeToLive": "PT1H",

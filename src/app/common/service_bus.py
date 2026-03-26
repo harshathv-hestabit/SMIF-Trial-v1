@@ -41,6 +41,7 @@ def _to_service_bus_message(
     message_id: str | None = None,
     correlation_id: str | None = None,
     subject: str | None = None,
+    scheduled_enqueue_time_utc: datetime | None = None,
 ) -> ServiceBusMessage:
     return ServiceBusMessage(
         json.dumps(payload),
@@ -48,6 +49,7 @@ def _to_service_bus_message(
         message_id=message_id,
         correlation_id=correlation_id,
         subject=subject,
+        scheduled_enqueue_time_utc=scheduled_enqueue_time_utc,
     )
 
 
@@ -85,6 +87,7 @@ class ServiceBusPublisher:
         message_id: str | None = None,
         correlation_id: str | None = None,
         subject: str | None = None,
+        scheduled_enqueue_time_utc: datetime | None = None,
     ) -> None:
         message = _to_service_bus_message(
             payload,
@@ -92,6 +95,7 @@ class ServiceBusPublisher:
             message_id=message_id,
             correlation_id=correlation_id,
             subject=subject,
+            scheduled_enqueue_time_utc=scheduled_enqueue_time_utc,
         )
         with self._client.get_queue_sender(queue_name=queue_name) as sender:
             sender.send_messages(message)
@@ -124,6 +128,7 @@ class AsyncServiceBusPublisher:
         message_id: str | None = None,
         correlation_id: str | None = None,
         subject: str | None = None,
+        scheduled_enqueue_time_utc: datetime | None = None,
     ) -> None:
         message = _to_service_bus_message(
             payload,
@@ -131,6 +136,7 @@ class AsyncServiceBusPublisher:
             message_id=message_id,
             correlation_id=correlation_id,
             subject=subject,
+            scheduled_enqueue_time_utc=scheduled_enqueue_time_utc,
         )
         async with self._client.get_queue_sender(queue_name=queue_name) as sender:
             await sender.send_messages(message)

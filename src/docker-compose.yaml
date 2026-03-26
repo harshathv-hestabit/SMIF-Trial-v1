@@ -37,7 +37,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-      start_period: 10s
+      start_period: 5s
 
   # Cosmos DB Emulator
   cosmos:
@@ -53,17 +53,22 @@ services:
     environment:
       - AZURE_COSMOS_EMULATOR_PARTITION_COUNT=10
       - AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE=true
+      - PROTOCOL=https
+      - EXPLORER_PROTOCOL=https-insecure
+      - GATEWAY_PUBLIC_ENDPOINT=cosmos-emulator
       # - AZURE_COSMOS_EMULATOR_IP_ADDRESS_OVERRIDE=127.0.0.1
     volumes:
       - cosmos_data:/tmp/cosmos/appdata
     networks:
-      - finance-net
+      finance-net:
+        aliases:
+          - cosmos-emulator.DOMAIN
     healthcheck:
-      test: ["CMD", "curl", "-f", "-k", "https://localhost:8081/_explorer/emulator.pem"]
-      interval: 30s
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:8081/_explorer/index.html"]
+      interval: 20s
       timeout: 10s
-      retries: 10
-      start_period: 60s
+      retries: 2
+      start_period: 10s
 
   # EventHub Emulator
   # Requires: infra/eventhub-config.json
@@ -140,7 +145,7 @@ services:
       retries: 10
       start_period: 30s
 
-  # DPS Module — Python service + Streamlit UI
+  # DPS Streamlit UI
   dps:
     build:
       context: .
@@ -151,6 +156,12 @@ services:
       - "8501:8501"     # Streamlit UI
     env_file:
       - .env.docker
+    command:
+      - streamlit
+      - run
+      - app/modules/DPS/streamlit_app.py
+      - --server.headless=true
+      - --server.port=8501
     volumes:
       - ./.env.docker:/app/.env:ro
       - ./requirements.txt:/app/requirements.txt:ro
@@ -159,10 +170,6 @@ services:
         condition: service_healthy
       cosmos:
         condition: service_healthy
-      eventhub:
-        condition: service_started
-      servicebus-emulator:
-        condition: service_started
     networks:
       - finance-net
     restart: on-failure
@@ -203,16 +210,16 @@ services:
       retries: 5
       start_period: 20s
 
-  eh_dispatcher:
+  functions:
     build:
       context: .
-      dockerfile: app/modules/EH_DISPATCHER/.dockerfile
-    container_name: eh-dispatcher
-    hostname: eh-dispatcher
+      dockerfile: app/functions/.dockerfile
+    container_name: azure-functions
+    hostname: azure-functions
+    ports:
+      - "7071:80"
     env_file:
       - .env.docker
-    volumes:
-      - ./.env.docker:/app/.env:ro
     depends_on:
       azurite:
         condition: service_healthy
@@ -220,8 +227,63 @@ services:
         condition: service_healthy
       servicebus-emulator:
         condition: service_started
+    networks:
+      - finance-net
+    restart: on-failure
+
+  news_provider:
+    build:
+      context: .
+      dockerfile: app/modules/NEWS_PROVIDER/.dockerfile
+    container_name: news-provider
+    hostname: news-provider
+    ports:
+      - 0.0.0.0:8080:8080
+    env_file:
+      - .env.docker
+    volumes:
+      - ./.env.docker:/app/.env:ro
+    networks:
+      - finance-net
+    restart: on-failure
+
+  dps_news_processor:
+    build:
+      context: .
+      dockerfile: app/modules/DPS/services/news_processor/.dockerfile
+    container_name: news-processor
+    hostname: news-processor
+    env_file:
+      - .env.docker
+    volumes:
+      - ./.env.docker:/app/.env:ro
+      - ./requirements.txt:/app/requirements.txt:ro
+    depends_on:
+      azurite:
+        condition: service_healthy
+      cosmos:
+        condition: service_healthy
       eventhub:
         condition: service_started
+    networks:
+      - finance-net
+    restart: on-failure
+
+  dps_client_processor:
+    build:
+      context: .
+      dockerfile: app/modules/DPS/services/client_processor/.dockerfile
+    container_name: dps-client-processor
+    hostname: dps-client-processor
+    env_file:
+      - .env.docker
+    volumes:
+      - ./.env.docker:/app/.env:ro
+      - ./requirements.txt:/app/requirements.txt:ro
+      - ./app/modules/DPS/services/client_processor/portfolio.csv:/app/app/modules/DPS/services/client_processor/portfolio.csv:ro
+    depends_on:
+      cosmos:
+        condition: service_healthy
     networks:
       - finance-net
     restart: on-failure

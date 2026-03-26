@@ -1,5 +1,5 @@
 from .cosmosdb import get_cosmos_async_client
-from .eventhub import EventProducer
+from .eventhub import EventConsumer, EventProducer
 from .service_bus import (
     AsyncServiceBusPublisher,
     ServiceBusPublisher,
@@ -9,6 +9,7 @@ from .service_bus import (
 
 __all__ = (
     "get_cosmos_async_client",
+    "EventConsumer",
     "EventProducer",
     "AsyncServiceBusPublisher",
     "ServiceBusPublisher",
