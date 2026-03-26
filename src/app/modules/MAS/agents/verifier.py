@@ -14,10 +14,10 @@ You are a financial insight quality evaluator.
 
 NEWS EVENT
 Title: {news.get("title")}
-Tickers: {news.get("tickers")}
+Content: {news.get("symbols")}
 
 CLIENT PORTFOLIO
-Holdings: {portfolio.get("holdings")}
+Holdings: {portfolio}
 
 GENERATED INSIGHT
 {insight}
