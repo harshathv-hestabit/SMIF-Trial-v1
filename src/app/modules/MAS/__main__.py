@@ -1,7 +1,10 @@
 import asyncio
 import logging
 
-from .config import AsyncServiceBusPublisher, decode_message_body, run_indexing, settings
+from azure.servicebus.exceptions import ServiceBusConnectionError, ServiceBusError
+
+from app.common import AsyncNewsMonitor
+from .config import AsyncServiceBusPublisher, decode_message_body, settings
 from .workflow.generate_insight import InsightState, build_insight_graph
 from .workflow.hnw import HNWState, build_hnw_graph
 from .workflow.standard import StandardState, build_standard_graph
@@ -15,6 +18,10 @@ logging.getLogger("azure").setLevel(logging.WARNING)
 logging.getLogger("aiohttp").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
+
+
+SERVICEBUS_RECONNECT_DELAY_SECONDS = 5
+SERVICEBUS_MAX_RECONNECT_DELAY_SECONDS = 30
 
 
 hnw_graph = build_hnw_graph()
@@ -33,7 +40,6 @@ async def run_hnw_workflow(event_body: dict) -> dict:
         "news_doc": None,
         "relevance_results": {},
         "candidate_clients": [],
-        "client_documents": {},
         "generate_insight_events": [],
     }
     result = await asyncio.to_thread(hnw_graph.invoke, initial_state)
@@ -69,11 +75,27 @@ async def run_standard_workflow(event_body: dict) -> dict:
 
 
 async def run_generate_insight_workflow(event_body: dict) -> dict:
+    news_doc_id = event_body.get("news_doc_id")
+    partition_key = event_body.get("partition_key", news_doc_id)
+    news_monitor = AsyncNewsMonitor(
+        cosmos_url=settings.COSMOS_URL,
+        cosmos_key=settings.COSMOS_KEY,
+        cosmos_db=settings.COSMOS_DB,
+        news_container=settings.NEWS_CONTAINER,
+    )
     logger.info(
         "workflow_started workflow=generate_insight client_id=%s news_doc_id=%s",
         event_body.get("client_id"),
-        event_body.get("news_doc_id"),
+        news_doc_id,
     )
+    if news_doc_id:
+        await news_monitor.record(
+            news_id=news_doc_id,
+            partition_key=partition_key,
+            stage="generate_insight",
+            status="processing",
+            details={"client_id": event_body.get("client_id")},
+        )
     initial_state: InsightState = {
         "client_id": event_body.get("client_id", "unknown"),
         "news_document": event_body.get("news_document", {}),
@@ -84,15 +106,40 @@ async def run_generate_insight_workflow(event_body: dict) -> dict:
         "iterations": 0,
         "status": "pending",
     }
-    result = await insight_graph.ainvoke(initial_state)
-    logger.info(
-        "workflow_completed workflow=generate_insight client_id=%s news_doc_id=%s status=%s score=%s",
-        event_body.get("client_id"),
-        event_body.get("news_doc_id"),
-        result["status"],
-        result["verification_score"],
-    )
-    return result
+    try:
+        result = await insight_graph.ainvoke(initial_state)
+        logger.info(
+            "workflow_completed workflow=generate_insight client_id=%s news_doc_id=%s status=%s score=%s",
+            event_body.get("client_id"),
+            news_doc_id,
+            result["status"],
+            result["verification_score"],
+        )
+        if news_doc_id:
+            await news_monitor.record(
+                news_id=news_doc_id,
+                partition_key=partition_key,
+                stage="generate_insight",
+                status=result["status"],
+                details={
+                    "client_id": event_body.get("client_id"),
+                    "verification_score": result["verification_score"],
+                    "iterations": result["iterations"],
+                },
+            )
+        return result
+    except Exception:
+        if news_doc_id:
+            await news_monitor.record(
+                news_id=news_doc_id,
+                partition_key=partition_key,
+                stage="generate_insight",
+                status="failed",
+                details={"client_id": event_body.get("client_id")},
+            )
+        raise
+    finally:
+        await news_monitor.close()
 
 
 QUEUE_WORKFLOWS = {
@@ -102,7 +149,7 @@ QUEUE_WORKFLOWS = {
         "handler": run_hnw_workflow,
         "concurrency": settings.REALTIME_WORKFLOW_CONCURRENCY,
     },
-    settings.QUEUE_STANDARD_NEWS: {
+    settings.QUEUE_DELAYED_NEWS: {
         "workflow_name": "standard",
         "expected_event_type": "standard_news",
         "handler": run_standard_workflow,
@@ -178,53 +225,85 @@ async def handle_queue_message(
 
 
 async def consume_queue(
-    bus_client: AsyncServiceBusPublisher,
     queue_name: str,
     semaphore: asyncio.Semaphore,
 ) -> None:
     in_flight: set[asyncio.Task] = set()
+    reconnect_delay = SERVICEBUS_RECONNECT_DELAY_SECONDS
 
-    async with bus_client.get_queue_receiver(queue_name=queue_name) as receiver:
-        while True:
-            await semaphore.acquire()
+    while True:
+        try:
+            async with AsyncServiceBusPublisher(settings.SERVICEBUS_CONNECTION_STRING) as bus_client:
+                async with bus_client.get_queue_receiver(queue_name=queue_name) as receiver:
+                    logger.info("queue_consumer_connected queue=%s", queue_name)
+                    reconnect_delay = SERVICEBUS_RECONNECT_DELAY_SECONDS
 
-            messages = await receiver.receive_messages(
-                max_message_count=1,
-                max_wait_time=5,
+                    while True:
+                        await semaphore.acquire()
+
+                        try:
+                            messages = await receiver.receive_messages(
+                                max_message_count=1,
+                                max_wait_time=5,
+                            )
+                        except (ServiceBusConnectionError, ServiceBusError):
+                            semaphore.release()
+                            raise
+
+                        if not messages:
+                            semaphore.release()
+                            continue
+
+                        task = asyncio.create_task(
+                            handle_queue_message(
+                                queue_name=queue_name,
+                                receiver=receiver,
+                                message=messages[0],
+                                semaphore=semaphore,
+                            )
+                        )
+                        in_flight.add(task)
+                        task.add_done_callback(in_flight.discard)
+        except asyncio.CancelledError:
+            raise
+        except (ServiceBusConnectionError, ServiceBusError) as exc:
+            logger.warning(
+                "queue_consumer_reconnecting queue=%s delay_seconds=%s error=%s",
+                queue_name,
+                reconnect_delay,
+                exc,
             )
-            if not messages:
-                semaphore.release()
-                continue
-
-            task = asyncio.create_task(
-                handle_queue_message(
-                    queue_name=queue_name,
-                    receiver=receiver,
-                    message=messages[0],
-                    semaphore=semaphore,
-                )
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(
+                reconnect_delay * 2,
+                SERVICEBUS_MAX_RECONNECT_DELAY_SECONDS,
             )
-            in_flight.add(task)
-            task.add_done_callback(in_flight.discard)
+        except Exception:
+            logger.exception("queue_consumer_unexpected_error queue=%s", queue_name)
+            await asyncio.sleep(reconnect_delay)
+            reconnect_delay = min(
+                reconnect_delay * 2,
+                SERVICEBUS_MAX_RECONNECT_DELAY_SECONDS,
+            )
+        finally:
+            if in_flight:
+                await asyncio.gather(*in_flight, return_exceptions=True)
+                in_flight.clear()
 
 
 async def main() -> None:
     logger.info("mas_startup queues=%s", list(QUEUE_WORKFLOWS.keys()))
-    async with AsyncServiceBusPublisher(settings.SERVICEBUS_CONNECTION_STRING) as bus_client:
-        semaphores = {
-            queue_name: asyncio.Semaphore(int(config["concurrency"]))
-            for queue_name, config in QUEUE_WORKFLOWS.items()
-        }
-        await asyncio.gather(
-            *[
-                consume_queue(bus_client, queue_name, semaphores[queue_name])
-                for queue_name in QUEUE_WORKFLOWS
-            ]
-        )
+    semaphores = {
+        queue_name: asyncio.Semaphore(int(config["concurrency"]))
+        for queue_name, config in QUEUE_WORKFLOWS.items()
+    }
+    await asyncio.gather(
+        *[
+            consume_queue(queue_name, semaphores[queue_name])
+            for queue_name in QUEUE_WORKFLOWS
+        ]
+    )
 
 
 if __name__ == "__main__":
-    logger.info("mas_indexing_start")
-    asyncio.run(run_indexing())
-    logger.info("mas_indexing_complete")
     asyncio.run(main())

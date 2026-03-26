@@ -52,6 +52,7 @@ def create_insight_events(state: StandardState) -> StandardState:
             "client_id": p["client_id"],
             "client_name": p["client_id"],
             "news_doc_id": p["news"]["id"],
+            "partition_key": p["news"]["id"],
             "news_title": p["news"]["title"],
             "news_document": p["news"],
             "client_portfolio_document": next(

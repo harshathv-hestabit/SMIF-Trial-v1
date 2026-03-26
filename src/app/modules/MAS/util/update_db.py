@@ -26,6 +26,7 @@ async def update_db(state: dict):
         doc = {
             "id": f"{state['client_id']}_{int(time.time() * 1000)}",
             "client_id": state["client_id"],
+            "news_doc_id": news.get("id"),
             "insight": state["insight_draft"],
             "verification_score": state["verification_score"],
             "news_title": news.get("title"),

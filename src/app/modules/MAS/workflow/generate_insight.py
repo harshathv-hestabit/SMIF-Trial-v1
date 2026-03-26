@@ -31,12 +31,12 @@ async def verify_insight(state):
     return state
 
 async def save_insight(state):
-    await update_db(state)
     state["status"] = "verified"
+    await update_db(state)
     return state
 
 def log_failure(state: InsightState) -> InsightState:
-    print(f"[Monitor] FAILED — max iterations reached for client {state['client_id']}")
+    print(f"[Monitor] FAILED — max iterations reached for client {state['client_id']}. Feedback: {state['verification_feedback']}")
     state["status"] = "failed"
     return state
 

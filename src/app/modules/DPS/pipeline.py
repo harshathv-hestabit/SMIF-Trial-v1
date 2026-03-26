@@ -1,4 +1,4 @@
-from app.modules.DPS.ingestion import collect_documents
+from app.common import update_news_lifecycle
 from app.modules.DPS.transformation import preprocess_news
 from app.modules.DPS.config.cosmosdb import CosmosAsyncClient
 
@@ -30,6 +30,12 @@ def _build_run_logger() -> tuple[logging.Logger, logging.Handler, Path]:
 
 async def process_document(cosmos, doc, logger, doc_index):
     processed = await asyncio.to_thread(preprocess_news, doc)
+    update_news_lifecycle(
+        processed,
+        stage="dps_news_processor",
+        status="stored",
+        details={"doc_index": doc_index, "ingest_mode": "streamlit_pipeline"},
+    )
     logger.info(
         "UPSERT_START doc_index=%s processed_id=%s title=%r published_at=%r",
         doc_index,
@@ -46,7 +52,7 @@ async def process_document(cosmos, doc, logger, doc_index):
     )
 
 async def run_pipeline(news_documents: list):
-    docs = collect_documents(news_documents)
+    docs = list(news_documents or [])
     tasks = []
     logger, handler, log_path = _build_run_logger()
     cosmos = CosmosAsyncClient()
