@@ -6,11 +6,11 @@ import streamlit as st
 from azure.cosmos import CosmosClient
 
 
-SRC_ROOT = Path(__file__).resolve().parents[4]
+SRC_ROOT = Path(__file__).resolve().parents[3]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from app.modules.MAS.config.settings import settings
+from app.modules.FEED.settings import settings
 
 
 st.set_page_config(page_title="SMIF Clients", layout="wide")
@@ -249,16 +249,12 @@ except Exception as exc:
     st.error(f"Failed to load portfolio or insights for client {selected_client_id}: {exc}")
     st.stop()
 
-left, right = st.columns([1.1, 1.4])
+render_portfolio_card(portfolio)
 
-with left:
-    render_portfolio_card(portfolio)
-
-with right:
-    st.subheader("Client Insights")
-    if not insights:
-        st.info(f"No insights found for client {selected_client_id}.")
-    else:
-        st.write(f"Showing {len(insights)} insight(s) for client `{selected_client_id}`.")
-        for insight in insights:
-            render_insight_card(insight)
+st.subheader("Client Insights")
+if not insights:
+    st.info(f"No insights found for client {selected_client_id}.")
+else:
+    st.write(f"Showing {len(insights)} insight(s) for client `{selected_client_id}`.")
+    for insight in insights:
+        render_insight_card(insight)

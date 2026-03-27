@@ -10,7 +10,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app/__init__.py ./app/__init__.py
 COPY app/modules/__init__.py ./app/modules/__init__.py
-COPY app/modules/MAS ./app/modules/MAS
-COPY app/common ./app/common
+COPY app/modules/FEED ./app/modules/FEED
 
-CMD ["python", "-m", "app.modules.MAS"]
+EXPOSE 8502
+
+CMD ["streamlit", "run", "app/modules/FEED/main.py", "--server.headless=true", "--server.port=8502"]

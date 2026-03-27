@@ -1,0 +1,1 @@
+"""Insight feed Streamlit module."""
