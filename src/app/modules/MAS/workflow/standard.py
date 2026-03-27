@@ -1,107 +1,249 @@
-from typing import TypedDict, List
-from langgraph.graph import StateGraph, END
+from __future__ import annotations
 
+from collections import Counter
+from datetime import datetime, timezone
+from typing import TypedDict
+
+from azure.cosmos import CosmosClient
+from langgraph.graph import END, StateGraph
+
+from app.common import merge_news_monitoring, update_news_lifecycle
+from ..config import process_news_stream, settings
 from ..util import EventExecutor
 
-class StandardState(TypedDict):
-    trigger_event: dict            # scheduled job metadata
-    news_batch: List[dict]         # accumulated news from data lake
-    client_portfolios: List[dict]  # retrieved via MCP
-    relevance_map: List[dict]      # list of {client_id, news_item} pairs above threshold
-    generate_insight_events: List[dict]
 
 RELEVANCE_THRESHOLD = 0.5
+TOP_K = 20
+
+cosmos_client = CosmosClient(
+    url=settings.COSMOS_URL,
+    credential=settings.COSMOS_KEY,
+    connection_verify=False,
+    enable_endpoint_discovery=False,
+    connection_timeout=5,
+)
+
+news_container = (
+    cosmos_client
+    .get_database_client(settings.COSMOS_DB)
+    .get_container_client(settings.NEWS_CONTAINER)
+)
+
+
+class StandardState(TypedDict):
+    trigger_event: dict
+    news_batch: list[dict]
+    relevance_results: dict[str, list[dict]]
+    relevance_map: list[dict]
+    generate_insight_events: list[dict]
+
 
 def standard_agent_activation(state: StandardState) -> StandardState:
-    print(f"[Standard] Activated by scheduled trigger: {state['trigger_event'].get('job_id', 'N/A')}")
+    print(
+        f"[Standard] Activated by scheduled trigger: "
+        f"{state['trigger_event'].get('job_id', 'N/A')}"
+    )
     return state
+
+
+def _record_news_stage(
+    news_doc: dict,
+    *,
+    stage: str,
+    status: str,
+    details: dict | None = None,
+) -> None:
+    latest_doc = news_container.read_item(
+        item=news_doc["id"],
+        partition_key=news_doc.get("id"),
+    )
+    merge_news_monitoring(news_doc, latest_doc)
+    update_news_lifecycle(news_doc, stage=stage, status=status, details=details)
+    news_container.upsert_item(news_doc)
+
+
+def _parse_iso_datetime(value: object | None) -> datetime | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip().replace("Z", "+00:00")
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _eligible_before_iso(trigger_event: dict) -> str:
+    eligible_before = (
+        _parse_iso_datetime(trigger_event.get("checkpoint_end"))
+        or _parse_iso_datetime(trigger_event.get("requested_at"))
+        or datetime.now(timezone.utc)
+    )
+    return eligible_before.astimezone(timezone.utc).isoformat()
+
 
 def fetch_news_batch(state: StandardState) -> StandardState:
-    state["news_batch"] = [
-        {"id": "n1", "title": "Fed holds rates steady", "tickers": ["SPY"]},
-        {"id": "n2", "title": "Tesla recall announced",  "tickers": ["TSLA"]},
-    ]
-    print(f"[Standard] Fetched {len(state['news_batch'])} news items")
+    eligible_before = _eligible_before_iso(state["trigger_event"])
+    batch_limit = max(int(settings.STANDARD_WORKFLOW_BATCH_LIMIT), 1)
+    query = f"""
+    SELECT TOP {batch_limit} * FROM c
+    WHERE IS_DEFINED(c.monitoring.stages.retail_batch.status)
+      AND c.monitoring.stages.retail_batch.status = @pending_status
+      AND IS_DEFINED(c.monitoring.stages.retail_batch.timestamp)
+      AND c.monitoring.stages.retail_batch.timestamp <= @eligible_before
+    ORDER BY c.monitoring.stages.retail_batch.timestamp ASC
+    """
+    news_batch = list(
+        news_container.query_items(
+            query=query,
+            parameters=[
+                {"name": "@pending_status", "value": "pending"},
+                {"name": "@eligible_before", "value": eligible_before},
+            ],
+            enable_cross_partition_query=True,
+        )
+    )
+    state["news_batch"] = news_batch
+
+    for news_doc in news_batch:
+        _record_news_stage(
+            news_doc,
+            stage="mas_standard",
+            status="processing",
+            details={
+                "job_id": state["trigger_event"].get("job_id"),
+                "eligible_before": eligible_before,
+            },
+        )
+
+    print(
+        f"[Standard] Fetched {len(news_batch)} delayed news items "
+        f"eligible_before={eligible_before}"
+    )
     return state
 
-def retrieve_portfolios(state: StandardState) -> StandardState:
-    state["client_portfolios"] = [
-        {"client_id": "std_001", "holdings": ["SPY", "BND"]},
-        {"client_id": "std_002", "holdings": ["TSLA", "AMZN"]},
-        {"client_id": "std_003", "holdings": ["AAPL", "GOOGL"]},
-    ]
-    print(f"[Standard] Retrieved {len(state['client_portfolios'])} portfolios")
-    return state
 
 def map_relevance(state: StandardState) -> StandardState:
-    pairs = []
-    for news in state["news_batch"]:
-        for client in state["client_portfolios"]:
-            overlap = set(news["tickers"]) & set(client["holdings"])
-            score = 0.9 if overlap else 0.2
-            if score >= RELEVANCE_THRESHOLD:
-                pairs.append({"client_id": client["client_id"], "news_id": news["id"],
-                               "news": news, "score": score})
-    state["relevance_map"] = pairs
-    print(f"[Standard] Relevance map: {len(pairs)} pairs above threshold")
+    news_lookup = {doc["id"]: doc for doc in state["news_batch"]}
+    relevance_results = process_news_stream(
+        news_docs=state["news_batch"],
+        top_k=TOP_K,
+        min_score=RELEVANCE_THRESHOLD,
+        client_segments=["retail"],
+    )
+    relevance_map = []
+    for news_id, matched_clients in relevance_results.items():
+        news_doc = news_lookup.get(news_id)
+        if news_doc is None:
+            continue
+        for client in matched_clients:
+            relevance_map.append(
+                {
+                    "client_id": client["client_id"],
+                    "client_name": client.get("client_name"),
+                    "news_id": news_id,
+                    "news_document": news_doc,
+                    "client_portfolio_document": client.get(
+                        "client_portfolio_document",
+                        {},
+                    ),
+                    "score": client["relevance_score"],
+                    "matched_isins": client.get("matched_isins", []),
+                    "matched_tags": client.get("matched_tags", []),
+                }
+            )
+
+    state["relevance_results"] = relevance_results
+    state["relevance_map"] = relevance_map
+    print(f"[Standard] Relevance map: {len(relevance_map)} retail client/news pairs")
     return state
+
 
 def create_insight_events(state: StandardState) -> StandardState:
-    state["generate_insight_events"] = [
-        {
-            "client_id": p["client_id"],
-            "client_name": p["client_id"],
-            "news_doc_id": p["news"]["id"],
-            "partition_key": p["news"]["id"],
-            "news_title": p["news"]["title"],
-            "news_document": p["news"],
-            "client_portfolio_document": next(
-                (
-                    portfolio
-                    for portfolio in state["client_portfolios"]
-                    if portfolio["client_id"] == p["client_id"]
-                ),
-                {},
-            ),
-            "relevance_score": p["score"],
-            "matched_isins": p["news"].get("tickers", []),
-            "matched_tags": p["news"].get("tags", []),
-            "priority": "scheduled",
-            "source": "mas.standard_workflow",
-        }
-        for p in state["relevance_map"]
-    ]
-    print(f"[Standard] Created {len(state['generate_insight_events'])} insight events")
+    events = []
+    for pair in state["relevance_map"]:
+        news_doc = pair["news_document"]
+        events.append(
+            {
+                "client_id": pair["client_id"],
+                "client_name": pair["client_name"] or pair["client_id"],
+                "news_doc_id": news_doc["id"],
+                "partition_key": news_doc["id"],
+                "news_title": news_doc.get("title"),
+                "news_document": news_doc,
+                "client_portfolio_document": pair["client_portfolio_document"],
+                "relevance_score": pair["score"],
+                "matched_isins": pair["matched_isins"],
+                "matched_tags": pair["matched_tags"],
+                "priority": "scheduled",
+                "source": "mas.standard_workflow",
+            }
+        )
+    state["generate_insight_events"] = events
 
-    if state["generate_insight_events"]:
+    print(f"[Standard] Created {len(events)} retail insight events")
+
+    if events:
         with EventExecutor() as executor:
-            executor.publish_insight_events(state["generate_insight_events"])
+            executor.publish_insight_events(events)
+
+    queued_counts = Counter(event["news_doc_id"] for event in events)
+    job_id = state["trigger_event"].get("job_id")
+
+    for news_doc in state["news_batch"]:
+        queued_events = queued_counts.get(news_doc["id"], 0)
+        _record_news_stage(
+            news_doc,
+            stage="mas_standard",
+            status="completed",
+            details={"job_id": job_id, "candidate_count": queued_events},
+        )
+        if queued_events:
+            _record_news_stage(
+                news_doc,
+                stage="generate_insight_queue",
+                status="queued",
+                details={"queued_events": queued_events, "workflow": "standard"},
+            )
+            _record_news_stage(
+                news_doc,
+                stage="retail_batch",
+                status="dispatched",
+                details={"job_id": job_id, "queued_events": queued_events},
+            )
+        else:
+            _record_news_stage(
+                news_doc,
+                stage="retail_batch",
+                status="no_matches",
+                details={"job_id": job_id, "queued_events": 0},
+            )
 
     return state
+
+
+def has_news_batch(state: StandardState) -> str:
+    return "map_relevance" if state.get("news_batch") else END
+
 
 def build_standard_graph() -> StateGraph:
     g = StateGraph(StandardState)
-    g.add_node("activate",      standard_agent_activation)
-    g.add_node("fetch_news",    fetch_news_batch)
-    g.add_node("retrieve",      retrieve_portfolios)
+    g.add_node("activate", standard_agent_activation)
+    g.add_node("fetch_news", fetch_news_batch)
     g.add_node("map_relevance", map_relevance)
     g.add_node("create_events", create_insight_events)
 
     g.set_entry_point("activate")
-    g.add_edge("activate",      "fetch_news")
-    g.add_edge("fetch_news",    "retrieve")
-    g.add_edge("retrieve",      "map_relevance")
+    g.add_edge("activate", "fetch_news")
+    g.add_conditional_edges(
+        "fetch_news",
+        has_news_batch,
+        {"map_relevance": "map_relevance", END: END},
+    )
     g.add_edge("map_relevance", "create_events")
     g.add_edge("create_events", END)
     return g.compile()
-
-if __name__ == "__main__":
-    graph = build_standard_graph()
-    result = graph.invoke({
-        "trigger_event": {"job_id": "sched_20240315_0900"},
-        "news_batch": [],
-        "client_portfolios": [],
-        "relevance_map": [],
-        "generate_insight_events": [],
-    })
-    print("\nFinal insight events:", result["generate_insight_events"])

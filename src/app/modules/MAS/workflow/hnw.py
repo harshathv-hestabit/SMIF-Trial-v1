@@ -1,7 +1,7 @@
 from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, END
 from azure.cosmos import CosmosClient
-from app.common import update_news_lifecycle
+from app.common import merge_news_monitoring, update_news_lifecycle
 from ..config import process_news_stream, settings
 from ..util import EventExecutor
 
@@ -40,6 +40,11 @@ def _record_news_stage(
     status: str,
     details: dict | None = None,
 ) -> None:
+    latest_doc = news_container.read_item(
+        item=news_doc["id"],
+        partition_key=news_doc.get("id"),
+    )
+    merge_news_monitoring(news_doc, latest_doc)
     update_news_lifecycle(news_doc, stage=stage, status=status, details=details)
     news_container.upsert_item(news_doc)
 
@@ -65,6 +70,7 @@ def score_relevance(state: HNWState) -> HNWState:
         news_docs=[news_doc],
         top_k=20,
         min_score=RELEVANCE_THRESHOLD,
+        client_segments=["hnw"],
     )
     state["relevance_results"] = relevance_results
 
