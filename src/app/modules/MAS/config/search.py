@@ -49,38 +49,48 @@ def score_news_against_clients(
     news_doc: dict,
     top_k: int = 5,
     min_score: float = 0.0,
+    client_segments: list[str] | None = None,
 ) -> list[dict]:
     news_text = _news_to_text(news_doc)
     news_vec = _embed_query(news_text)
     news_tags = [tag.upper() for tag in news_doc.get("tags", [])]
     news_tickers = [symbol.split(".")[0].upper() for symbol in news_doc.get("symbols", [])]
+    segment_filter = _build_client_segment_filter(client_segments)
+
+    knn_query: dict = {
+        "field": "embedding",
+        "query_vector": news_vec,
+        "k": top_k,
+        "num_candidates": 100,
+    }
+    if segment_filter:
+        knn_query["filter"] = segment_filter
 
     knn_response = es.search(
         index=INDEX,
         size=top_k,
-        knn={
-            "field": "embedding",
-            "query_vector": news_vec,
-            "k": top_k,
-            "num_candidates": 100,
-        },
+        knn=knn_query,
         source={"excludes": ["embedding"]},
     )
+
+    bm25_query: dict = {
+        "bool": {
+            "should": [
+                {"terms": {"ticker_symbols": news_tickers, "boost": 3.0}},
+                {"terms": {"tags_of_interest": news_tags, "boost": 1.5}},
+                {"match": {"asset_descriptions": {"query": news_text, "boost": 1.0}}},
+                {"match": {"query": {"query": news_text, "boost": 0.8}}},
+            ],
+            "minimum_should_match": 1,
+        }
+    }
+    if segment_filter:
+        bm25_query["bool"]["filter"] = [segment_filter]
 
     bm25_response = es.search(
         index=INDEX,
         size=top_k,
-        query={
-            "bool": {
-                "should": [
-                    {"terms": {"ticker_symbols": news_tickers, "boost": 3.0}},
-                    {"terms": {"tags_of_interest": news_tags, "boost": 1.5}},
-                    {"match": {"asset_descriptions": {"query": news_text, "boost": 1.0}}},
-                    {"match": {"query": {"query": news_text, "boost": 0.8}}},
-                ],
-                "minimum_should_match": 1,
-            }
-        },
+        query=bm25_query,
         source={"excludes": ["embedding"]},
     )
 
@@ -131,6 +141,7 @@ def process_news_stream(
     news_docs: list[dict],
     top_k: int = 5,
     min_score: float = 0.0,
+    client_segments: list[str] | None = None,
 ) -> dict[str, list[dict]]:
     results = {}
     for doc in news_docs:
@@ -139,7 +150,21 @@ def process_news_stream(
             doc,
             top_k=top_k,
             min_score=min_score,
+            client_segments=client_segments,
         )
         if matched_clients:
             results[news_id] = matched_clients
     return results
+
+
+def _build_client_segment_filter(client_segments: list[str] | None) -> dict | None:
+    normalized = sorted(
+        {
+            str(segment).strip().lower()
+            for segment in (client_segments or [])
+            if str(segment).strip()
+        }
+    )
+    if not normalized:
+        return None
+    return {"terms": {"client_segment": normalized}}

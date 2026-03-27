@@ -53,15 +53,15 @@ async def run_hnw_workflow(event_body: dict) -> dict:
 
 async def run_standard_workflow(event_body: dict) -> dict:
     logger.info(
-        "workflow_started workflow=standard job_id=%s checkpoint_start=%s checkpoint_end=%s",
+        "workflow_started workflow=standard job_id=%s requested_at=%s eligible_before=%s",
         event_body.get("job_id"),
-        event_body.get("checkpoint_start"),
+        event_body.get("requested_at"),
         event_body.get("checkpoint_end"),
     )
     initial_state: StandardState = {
         "trigger_event": event_body,
         "news_batch": [],
-        "client_portfolios": [],
+        "relevance_results": {},
         "relevance_map": [],
         "generate_insight_events": [],
     }

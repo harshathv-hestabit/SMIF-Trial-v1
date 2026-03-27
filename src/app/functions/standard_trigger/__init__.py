@@ -29,7 +29,7 @@ def _require_env(name: str) -> str:
 
 
 def _delay_minutes() -> int:
-    raw_value = os.getenv("STANDARD_TRIGGER_DELAY_MINUTES", "15")
+    raw_value = os.getenv("STANDARD_TRIGGER_DELAY_MINUTES", "2")
     try:
         delay = int(raw_value)
     except ValueError as exc:
@@ -41,15 +41,23 @@ def _delay_minutes() -> int:
     return delay
 
 
-def _build_payload(job_id: str, enqueue_at: datetime) -> dict:
+def _build_payload(
+    job_id: str,
+    *,
+    requested_at: datetime,
+    enqueue_at: datetime,
+    delay_minutes: int,
+) -> dict:
     queue_name = _require_env("QUEUE_DELAYED_NEWS")
     return build_event_payload(
         "standard_news",
         {
             "job_id": job_id,
             "trigger_type": "timer",
-            "requested_at": _utc_now().isoformat(),
+            "requested_at": requested_at.isoformat(),
+            "checkpoint_end": requested_at.isoformat(),
             "scheduled_enqueue_time_utc": enqueue_at.isoformat(),
+            "delay_minutes": delay_minutes,
         },
         source="functions.standard_trigger",
         queue_name=queue_name,
@@ -64,7 +72,12 @@ def main(mytimer: func.TimerRequest) -> None:
     queue_name = _require_env("QUEUE_DELAYED_NEWS")
     connection_string = _require_env("SERVICEBUS_CONNECTION_STRING")
 
-    payload = _build_payload(job_id, enqueue_at)
+    payload = _build_payload(
+        job_id,
+        requested_at=now,
+        enqueue_at=enqueue_at,
+        delay_minutes=delay_minutes,
+    )
 
     if mytimer.past_due:
         logger.warning("standard_trigger_past_due job_id=%s", job_id)

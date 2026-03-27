@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     QUEUE_GENERATE_INSIGHT: str = Field("generate-insight-events", description="Generate insight queue")
     REALTIME_WORKFLOW_CONCURRENCY: int = Field(1, description="Concurrent realtime workflow executions")
     STANDARD_WORKFLOW_CONCURRENCY: int = Field(1, description="Concurrent standard workflow executions")
+    STANDARD_WORKFLOW_BATCH_LIMIT: int = Field(50, description="Maximum delayed news items processed per standard workflow run")
     GENERATE_INSIGHT_CONCURRENCY: int = Field(1, description="Concurrent generate insight executions")
     SERVICEBUS_MAX_DELIVERY_ATTEMPTS: int = Field(5, description="Dead-letter after this many delivery attempts")
 
