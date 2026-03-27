@@ -60,6 +60,74 @@ def update_news_lifecycle(
     return document
 
 
+def preserve_news_monitoring(
+    incoming: dict[str, Any],
+    existing: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if existing is None:
+        return incoming
+
+    if "monitoring" in incoming:
+        return incoming
+
+    monitoring = existing.get("monitoring")
+    if monitoring:
+        incoming["monitoring"] = monitoring
+
+    return incoming
+
+
+def merge_news_monitoring(
+    incoming: dict[str, Any],
+    existing: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if existing is None:
+        return incoming
+
+    existing_monitoring = dict(existing.get("monitoring") or {})
+    incoming_monitoring = dict(incoming.get("monitoring") or {})
+
+    if not existing_monitoring:
+        return incoming
+    if not incoming_monitoring:
+        incoming["monitoring"] = existing_monitoring
+        return incoming
+
+    merged_stages = dict(existing_monitoring.get("stages") or {})
+    merged_stages.update(incoming_monitoring.get("stages") or {})
+
+    merged_timeline = list(existing_monitoring.get("timeline") or [])
+    seen_events = {
+        (
+            event.get("stage"),
+            event.get("status"),
+            event.get("timestamp"),
+        )
+        for event in merged_timeline
+    }
+    for event in incoming_monitoring.get("timeline") or []:
+        event_key = (
+            event.get("stage"),
+            event.get("status"),
+            event.get("timestamp"),
+        )
+        if event_key in seen_events:
+            continue
+        merged_timeline.append(event)
+        seen_events.add(event_key)
+
+    incoming["monitoring"] = {
+        **existing_monitoring,
+        **incoming_monitoring,
+        "stages": merged_stages,
+        "timeline": merged_timeline[-TIMELINE_LIMIT:],
+        "first_seen_at": existing_monitoring.get("first_seen_at")
+        or incoming_monitoring.get("first_seen_at")
+        or utc_now_iso(),
+    }
+    return incoming
+
+
 class SyncNewsMonitor:
     def __init__(
         self,
@@ -83,7 +151,9 @@ class SyncNewsMonitor:
         )
 
     def close(self) -> None:
-        self._client.close()
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            close()
 
     def record(
         self,
@@ -123,7 +193,9 @@ class AsyncNewsMonitor:
         self._container = self._database.get_container_client(news_container)
 
     async def close(self) -> None:
-        await self._client.close()
+        close = getattr(self._client, "close", None)
+        if callable(close):
+            await close()
 
     async def record(
         self,
