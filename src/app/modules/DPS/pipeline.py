@@ -36,6 +36,12 @@ async def process_document(cosmos, doc, logger, doc_index):
         status="stored",
         details={"doc_index": doc_index, "ingest_mode": "streamlit_pipeline"},
     )
+    update_news_lifecycle(
+        processed,
+        stage="retail_batch",
+        status="pending",
+        details={"target_workflow": "standard"},
+    )
     logger.info(
         "UPSERT_START doc_index=%s processed_id=%s title=%r published_at=%r",
         doc_index,

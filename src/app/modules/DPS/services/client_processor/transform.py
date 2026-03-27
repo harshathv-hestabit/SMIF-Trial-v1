@@ -10,6 +10,7 @@ import requests
 
 DEFAULT_PORTFOLIO_PATH = Path(__file__).resolve().parent / "portfolio.csv"
 DEFAULT_ISIN_CACHE_PATH = Path(__file__).resolve().parent / "isin_to_ticker.json"
+DEFAULT_HNW_AUM_THRESHOLD_AED = 10_000_000
 OPENFIGI_URL = "https://api.openfigi.com/v3/mapping"
 OPENFIGI_BATCH_SIZE = 10
 OPENFIGI_BATCH_SLEEP_SECONDS = 5
@@ -21,6 +22,8 @@ class ClientProfile:
     client_id: str
     client_name: str
     client_type: str
+    client_segment: str
+    client_segment_reason: str
     mandate: str
     total_aum_aed: float
     asset_types: list[str]
@@ -47,8 +50,12 @@ def load_portfolio_frame(path: Path) -> pd.DataFrame:
 def build_client_documents(
     portfolio_df: pd.DataFrame,
     cache_path: Path = DEFAULT_ISIN_CACHE_PATH,
+    hnw_aum_threshold_aed: float = DEFAULT_HNW_AUM_THRESHOLD_AED,
 ) -> list[dict]:
-    profiles = build_all_client_profiles(portfolio_df)
+    profiles = build_all_client_profiles(
+        portfolio_df,
+        hnw_aum_threshold_aed=hnw_aum_threshold_aed,
+    )
     all_isins = list({isin for profile in profiles.values() for isin in profile.isins})
     isin_ticker_map = build_isin_ticker_map(all_isins, cache_path=cache_path)
     attach_ticker_symbols(profiles, isin_ticker_map)
@@ -116,6 +123,8 @@ def client_profile_to_document(profile: ClientProfile) -> dict:
         "client_id": profile.client_id,
         "client_name": profile.client_name,
         "client_type": profile.client_type,
+        "client_segment": profile.client_segment,
+        "client_segment_reason": profile.client_segment_reason,
         "mandate": profile.mandate,
         "total_aum_aed": profile.total_aum_aed,
         "asset_types": profile.asset_types,
@@ -133,7 +142,11 @@ def client_profile_to_document(profile: ClientProfile) -> dict:
     }
 
 
-def build_client_profile(df: pd.DataFrame) -> ClientProfile:
+def build_client_profile(
+    df: pd.DataFrame,
+    *,
+    hnw_aum_threshold_aed: float = DEFAULT_HNW_AUM_THRESHOLD_AED,
+) -> ClientProfile:
     assert df["Client No."].nunique() == 1, "DataFrame must contain exactly one client."
 
     row0 = df.iloc[0]
@@ -142,6 +155,10 @@ def build_client_profile(df: pd.DataFrame) -> ClientProfile:
     client_type = str(row0["Client Type"])
     mandate = str(row0["Mandate"])
     total_aum = float(df[" Market Value AED "].sum())
+    client_segment, client_segment_reason = _derive_client_segment(
+        total_aum_aed=total_aum,
+        hnw_aum_threshold_aed=hnw_aum_threshold_aed,
+    )
 
     asset_types = sorted(df["Asset Type"].dropna().unique().tolist())
     asset_subtypes = sorted(df["Asset Subtype"].dropna().unique().tolist())
@@ -194,6 +211,8 @@ def build_client_profile(df: pd.DataFrame) -> ClientProfile:
         client_id=client_id,
         client_name=client_name,
         client_type=client_type,
+        client_segment=client_segment,
+        client_segment_reason=client_segment_reason,
         mandate=mandate,
         total_aum_aed=round(total_aum, 2),
         asset_types=asset_types,
@@ -210,12 +229,30 @@ def build_client_profile(df: pd.DataFrame) -> ClientProfile:
     )
 
 
-def build_all_client_profiles(df: pd.DataFrame) -> dict[str, ClientProfile]:
+def build_all_client_profiles(
+    df: pd.DataFrame,
+    *,
+    hnw_aum_threshold_aed: float = DEFAULT_HNW_AUM_THRESHOLD_AED,
+) -> dict[str, ClientProfile]:
     profiles = {}
     for _, group in df.groupby("Client No."):
-        profile = build_client_profile(group.reset_index(drop=True))
+        profile = build_client_profile(
+            group.reset_index(drop=True),
+            hnw_aum_threshold_aed=hnw_aum_threshold_aed,
+        )
         profiles[profile.client_id] = profile
     return profiles
+
+
+def _derive_client_segment(
+    *,
+    total_aum_aed: float,
+    hnw_aum_threshold_aed: float,
+) -> tuple[str, str]:
+    threshold = max(float(hnw_aum_threshold_aed), 0.0)
+    if total_aum_aed >= threshold:
+        return "hnw", f"total_aum_aed>={threshold:.2f}"
+    return "retail", f"total_aum_aed<{threshold:.2f}"
 
 
 def _derive_tags(

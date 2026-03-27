@@ -25,7 +25,10 @@ class ClientProcessorService:
     async def start(self) -> None:
         logger.info("client_processor_starting portfolio_path=%s", self.portfolio_path)
         portfolio_df = load_portfolio_frame(self.portfolio_path)
-        documents = build_client_documents(portfolio_df)
+        documents = build_client_documents(
+            portfolio_df,
+            hnw_aum_threshold_aed=settings.HNW_SEGMENT_MIN_AUM_AED,
+        )
         await upsert_client_profiles(documents)
         index_client_documents(documents)
         logger.info(

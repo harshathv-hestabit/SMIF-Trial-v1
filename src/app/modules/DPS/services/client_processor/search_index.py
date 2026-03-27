@@ -10,6 +10,34 @@ INDEX = "clients"
 DIM = 384
 EMBEDDING_MODEL = "models/gemini-embedding-001"
 
+INDEX_PROPERTIES = {
+    "client_id": {"type": "keyword"},
+    "client_name": {"type": "text"},
+    "client_type": {"type": "keyword"},
+    "client_segment": {"type": "keyword"},
+    "client_segment_reason": {"type": "keyword"},
+    "mandate": {"type": "keyword"},
+    "total_aum_aed": {"type": "double"},
+    "asset_types": {"type": "keyword"},
+    "asset_subtypes": {"type": "keyword"},
+    "asset_classifications": {"type": "keyword"},
+    "currencies": {"type": "keyword"},
+    "isins": {"type": "keyword"},
+    "ticker_symbols": {"type": "keyword"},
+    "asset_ids": {"type": "keyword"},
+    "asset_descriptions": {"type": "text"},
+    "classification_weights": {"type": "object", "enabled": False},
+    "asset_type_weights": {"type": "object", "enabled": False},
+    "query": {"type": "text"},
+    "tags_of_interest": {"type": "keyword"},
+    "embedding": {
+        "type": "dense_vector",
+        "dims": DIM,
+        "index": True,
+        "similarity": "cosine",
+    },
+}
+
 es = Elasticsearch(settings.ELASTICSEARCH_URL, verify_certs=False)
 document_embedder = GoogleGenerativeAIEmbeddings(
     model=EMBEDDING_MODEL,
@@ -21,6 +49,7 @@ document_embedder = GoogleGenerativeAIEmbeddings(
 
 def create_index() -> None:
     if es.indices.exists(index=INDEX).body:
+        es.indices.put_mapping(index=INDEX, properties=INDEX_PROPERTIES)
         return
 
     es.indices.create(
@@ -29,33 +58,7 @@ def create_index() -> None:
             "number_of_shards": 1,
             "number_of_replicas": 0,
         },
-        mappings={
-            "properties": {
-                "client_id": {"type": "keyword"},
-                "client_name": {"type": "text"},
-                "client_type": {"type": "keyword"},
-                "mandate": {"type": "keyword"},
-                "total_aum_aed": {"type": "double"},
-                "asset_types": {"type": "keyword"},
-                "asset_subtypes": {"type": "keyword"},
-                "asset_classifications": {"type": "keyword"},
-                "currencies": {"type": "keyword"},
-                "isins": {"type": "keyword"},
-                "ticker_symbols": {"type": "keyword"},
-                "asset_ids": {"type": "keyword"},
-                "asset_descriptions": {"type": "text"},
-                "classification_weights": {"type": "object", "enabled": False},
-                "asset_type_weights": {"type": "object", "enabled": False},
-                "query": {"type": "text"},
-                "tags_of_interest": {"type": "keyword"},
-                "embedding": {
-                    "type": "dense_vector",
-                    "dims": DIM,
-                    "index": True,
-                    "similarity": "cosine",
-                },
-            }
-        },
+        mappings={"properties": INDEX_PROPERTIES},
     )
 
 

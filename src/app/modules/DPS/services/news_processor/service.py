@@ -49,6 +49,12 @@ class NewsProcessorService:
                     "source": "eventhub",
                 },
             )
+            update_news_lifecycle(
+                normalized,
+                stage="retail_batch",
+                status="pending",
+                details={"target_workflow": "standard"},
+            )
             await self.cosmos.upsert_document(normalized)
             await partition_context.update_checkpoint(event)
             logger.info(

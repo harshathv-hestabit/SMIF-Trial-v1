@@ -19,6 +19,10 @@ class Settings(BaseSettings):
         default="",
         description="Optional path to the client portfolio CSV source file",
     )
+    HNW_SEGMENT_MIN_AUM_AED: float = Field(
+        10_000_000,
+        description="Minimum total AUM in AED required to classify a client as HNW",
+    )
     ELASTICSEARCH_URL: str = Field(..., description="Elastic Search endpoint")
 
     COSMOS_URL: str = Field(..., description="Cosmos DB endpoint")

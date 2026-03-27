@@ -2,7 +2,9 @@ import asyncio
 
 from azure.cosmos import PartitionKey
 from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
+from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from azure.core.exceptions import ServiceRequestError
+from app.common import preserve_news_monitoring
 from .settings import settings
 
 _initialized = False
@@ -57,6 +59,18 @@ class CosmosAsyncClient:
             await self.client.close()
 
     async def upsert_document(self, doc: dict):
+        doc_id = doc.get("id")
+        partition_key_field = settings.NEWS_CONTAINER_PARTITION_ID.lstrip("/")
+        partition_key = doc.get(partition_key_field, doc_id)
+
+        existing = None
+        if doc_id is not None:
+            try:
+                existing = await self.container.read_item(doc_id, partition_key)
+            except CosmosResourceNotFoundError:
+                existing = None
+
+        preserve_news_monitoring(doc, existing)
         await self.container.upsert_item(doc)
                 
     async def read_document(self, doc_id, partition_key):
