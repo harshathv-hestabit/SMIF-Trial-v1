@@ -66,9 +66,14 @@ src/
   requirements.txt
   app/
     common/
-      eventhub-config.json
-      servicebus-config.json
       settings.py
+      azure_services/
+        cosmos.py
+        eventhub-config.json
+        eventhub.py
+        service_bus.py
+        servicebus-config.json
+        settings.py
     functions/
       change_feed_service/
       standard_trigger/

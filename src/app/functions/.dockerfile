@@ -16,7 +16,11 @@ RUN apt-get update \
 RUN pip install --no-cache-dir \
     azure-functions==1.24.0 \
     azure-servicebus==7.14.2 \
-    azure-cosmos==4.9.0
+    azure-cosmos==4.9.0 \
+    pydantic==2.12.5 \
+    pydantic-settings==2.13.1 \
+    pydantic_core==2.41.5 
+
 
 COPY app/__init__.py ./app/__init__.py
 COPY app/modules/__init__.py ./app/modules/__init__.py

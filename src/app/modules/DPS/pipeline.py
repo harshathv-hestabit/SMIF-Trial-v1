@@ -1,4 +1,4 @@
-from app.common import update_news_lifecycle
+from app.common.news_monitor import update_news_lifecycle
 from app.modules.DPS.transformation import preprocess_news
 from app.modules.DPS.config.cosmosdb import CosmosAsyncClient
 

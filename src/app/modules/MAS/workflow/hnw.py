@@ -1,22 +1,19 @@
 from typing import TypedDict, Optional
 from langgraph.graph import StateGraph, END
-from azure.cosmos import CosmosClient
-from app.common import merge_news_monitoring, update_news_lifecycle
+from app.common.azure_services.cosmos import (
+    build_sync_cosmos_client,
+    get_container_client,
+    get_database_client,
+)
+from app.common.news_monitor import merge_news_monitoring, update_news_lifecycle
 from ..config import process_news_stream, settings
 from ..util import EventExecutor
 
-cosmos_client = CosmosClient(
-    url=settings.COSMOS_URL,
-    credential=settings.COSMOS_KEY,
-    connection_verify=False,
-    enable_endpoint_discovery=False,
-    connection_timeout=5,
-)
+cosmos_client = build_sync_cosmos_client(settings.COSMOS_URL, settings.COSMOS_KEY)
 
-news_container = (
-    cosmos_client
-    .get_database_client(settings.COSMOS_DB)
-    .get_container_client(settings.NEWS_CONTAINER)
+news_container = get_container_client(
+    get_database_client(cosmos_client, settings.COSMOS_DB),
+    settings.NEWS_CONTAINER,
 )
 
 class HNWState(TypedDict):

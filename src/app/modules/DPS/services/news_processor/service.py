@@ -4,7 +4,7 @@ from typing import Any
 
 from azure.eventhub import EventData
 
-from app.common import update_news_lifecycle
+from app.common.news_monitor import update_news_lifecycle
 from app.modules.DPS.config import EventConsumer, get_cosmos_async_client
 from .transform import normalize_news_document
 

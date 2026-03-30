@@ -1,11 +1,13 @@
 import json
 import logging
 
-from azure.core.exceptions import ResourceExistsError
 from azure.eventhub import EventData
-from azure.eventhub.aio import EventHubConsumerClient, EventHubProducerClient
-from azure.eventhub.extensions.checkpointstoreblobaio import BlobCheckpointStore
-from azure.storage.blob.aio import BlobServiceClient
+from app.common.azure_services.eventhub import (
+    build_checkpoint_store,
+    build_eventhub_consumer,
+    build_eventhub_producer,
+    ensure_checkpoint_container as ensure_shared_checkpoint_container,
+)
 
 from .settings import settings
 
@@ -15,19 +17,16 @@ logging.getLogger("azure.eventhub").setLevel(logging.WARNING)
 
 
 async def ensure_checkpoint_container() -> None:
-    async with BlobServiceClient.from_connection_string(settings.AZURE_STORAGE_CONNECTION_STRING) as client:
-        container = client.get_container_client(settings.CHECKPOINT_CONTAINER)
-        try:
-            await container.create_container()
-            logger.info("eventhub_checkpoint_container_created container=%s", settings.CHECKPOINT_CONTAINER)
-        except ResourceExistsError:
-            logger.info("eventhub_checkpoint_container_ready container=%s", settings.CHECKPOINT_CONTAINER)
+    await ensure_shared_checkpoint_container(
+        settings.AZURE_STORAGE_CONNECTION_STRING,
+        settings.CHECKPOINT_CONTAINER,
+    )
 
 class EventProducer:
     def __init__(self):        
-        self.producer = EventHubProducerClient.from_connection_string(
-            conn_str=settings.EVENTHUB_CONNECTION_STRING,
-            eventhub_name=settings.EVENTHUB_NAME
+        self.producer = build_eventhub_producer(
+            settings.EVENTHUB_CONNECTION_STRING,
+            settings.EVENTHUB_NAME,
         )
 
     async def __aenter__(self):
@@ -72,14 +71,14 @@ class EventConsumer:
             return
 
         await ensure_checkpoint_container()
-        checkpoint_store = BlobCheckpointStore.from_connection_string(
-            conn_str=settings.AZURE_STORAGE_CONNECTION_STRING,
-            container_name=settings.CHECKPOINT_CONTAINER,
+        checkpoint_store = build_checkpoint_store(
+            settings.AZURE_STORAGE_CONNECTION_STRING,
+            settings.CHECKPOINT_CONTAINER,
         )
-        self.consumer = EventHubConsumerClient.from_connection_string(
-            conn_str=self.conn,
-            eventhub_name=self.hub,
-            consumer_group=self.consumer_group,
+        self.consumer = build_eventhub_consumer(
+            self.conn,
+            self.hub,
+            self.consumer_group,
             checkpoint_store=checkpoint_store,
         )
 

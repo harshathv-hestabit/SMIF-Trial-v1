@@ -1,4 +1,4 @@
-from app.common.service_bus import (
+from app.common.azure_services.service_bus import (
     AsyncServiceBusPublisher,
     ServiceBusPublisher,
     build_event_payload,

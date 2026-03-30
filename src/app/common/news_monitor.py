@@ -3,8 +3,12 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from azure.cosmos import CosmosClient
-from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
+from app.common.azure_services.cosmos import (
+    build_async_cosmos_client,
+    build_sync_cosmos_client,
+    get_container_client,
+    get_database_client,
+)
 
 
 TIMELINE_LIMIT = 50
@@ -137,17 +141,10 @@ class SyncNewsMonitor:
         cosmos_db: str,
         news_container: str,
     ) -> None:
-        self._client = CosmosClient(
-            cosmos_url,
-            credential=cosmos_key,
-            connection_verify=False,
-            enable_endpoint_discovery=False,
-            connection_timeout=5,
-        )
-        self._container = (
-            self._client
-            .get_database_client(cosmos_db)
-            .get_container_client(news_container)
+        self._client = build_sync_cosmos_client(cosmos_url, cosmos_key)
+        self._container = get_container_client(
+            get_database_client(self._client, cosmos_db),
+            news_container,
         )
 
     def close(self) -> None:
@@ -182,15 +179,9 @@ class AsyncNewsMonitor:
         cosmos_db: str,
         news_container: str,
     ) -> None:
-        self._client = AsyncCosmosClient(
-            cosmos_url,
-            credential=cosmos_key,
-            connection_verify=False,
-            enable_endpoint_discovery=False,
-            connection_timeout=5,
-        )
-        self._database = self._client.get_database_client(cosmos_db)
-        self._container = self._database.get_container_client(news_container)
+        self._client = build_async_cosmos_client(cosmos_url, cosmos_key)
+        self._database = get_database_client(self._client, cosmos_db)
+        self._container = get_container_client(self._database, news_container)
 
     async def close(self) -> None:
         close = getattr(self._client, "close", None)

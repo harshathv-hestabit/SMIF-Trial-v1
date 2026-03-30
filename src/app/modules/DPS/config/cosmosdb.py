@@ -1,10 +1,14 @@
 import asyncio
 
-from azure.cosmos import PartitionKey
-from azure.cosmos.aio import CosmosClient as AsyncCosmosClient
 from azure.cosmos.exceptions import CosmosResourceNotFoundError
 from azure.core.exceptions import ServiceRequestError
-from app.common import preserve_news_monitoring
+from app.common.azure_services.cosmos import (
+    build_async_cosmos_client,
+    ensure_async_container,
+    get_container_client,
+    get_database_client,
+)
+from app.common.news_monitor import preserve_news_monitoring
 from .settings import settings
 
 _initialized = False
@@ -15,21 +19,14 @@ async def init_cosmos():
     if _initialized:
         return
 
-    client = AsyncCosmosClient(
-        settings.COSMOS_URL,
-        credential=settings.COSMOS_KEY,
-        connection_verify=False,
-        enable_endpoint_discovery=False,
-        connection_timeout=5,
-    )
+    client = build_async_cosmos_client(settings.COSMOS_URL, settings.COSMOS_KEY)
 
     async with client:
-        db = await client.create_database_if_not_exists(settings.COSMOS_DB)
-        await db.create_container_if_not_exists(
-            id=settings.NEWS_CONTAINER,
-            partition_key=PartitionKey(
-                path=settings.NEWS_CONTAINER_PARTITION_ID
-            ),
+        await ensure_async_container(
+            client,
+            database_name=settings.COSMOS_DB,
+            container_name=settings.NEWS_CONTAINER,
+            partition_key_path=settings.NEWS_CONTAINER_PARTITION_ID,
         )
 
     _initialized = True
@@ -44,15 +41,9 @@ class CosmosAsyncClient:
     async def connect(self):
         await init_cosmos()
 
-        self.client = AsyncCosmosClient(
-            settings.COSMOS_URL,
-            credential=settings.COSMOS_KEY,
-            connection_verify=False,
-            enable_endpoint_discovery=False,
-            connection_timeout=5,
-        )
-        self.database = self.client.get_database_client(settings.COSMOS_DB)
-        self.container = self.database.get_container_client(settings.NEWS_CONTAINER)
+        self.client = build_async_cosmos_client(settings.COSMOS_URL, settings.COSMOS_KEY)
+        self.database = get_database_client(self.client, settings.COSMOS_DB)
+        self.container = get_container_client(self.database, settings.NEWS_CONTAINER)
 
     async def close(self):
         if self.client:

@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pandas as pd
 import streamlit as st
-from azure.cosmos import CosmosClient
 
 # Allow local `streamlit run src/app/modules/DPS/streamlit_app.py`
 # to resolve imports from the `src` package root without requiring PYTHONPATH.
@@ -15,6 +14,11 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from app.modules.DPS.config.settings import settings
+from app.common.azure_services.cosmos import (
+    build_sync_cosmos_client,
+    get_container_client,
+    get_database_client,
+)
 
 
 NEWS_STAGE_LABELS = {
@@ -33,17 +37,11 @@ st.caption("Admin view of news documents moving from DPS into MAS and insight ge
 
 @st.cache_resource
 def get_cosmos_containers():
-    client = CosmosClient(
-        settings.COSMOS_URL,
-        credential=settings.COSMOS_KEY,
-        connection_verify=False,
-        enable_endpoint_discovery=False,
-        connection_timeout=5,
-    )
-    database = client.get_database_client(settings.COSMOS_DB)
+    client = build_sync_cosmos_client(settings.COSMOS_URL, settings.COSMOS_KEY)
+    database = get_database_client(client, settings.COSMOS_DB)
     return (
-        database.get_container_client(settings.NEWS_CONTAINER),
-        database.get_container_client(settings.INSIGHTS_CONTAINER),
+        get_container_client(database, settings.NEWS_CONTAINER),
+        get_container_client(database, settings.INSIGHTS_CONTAINER),
     )
 
 

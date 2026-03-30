@@ -3,7 +3,7 @@ import logging
 
 from azure.servicebus.exceptions import ServiceBusConnectionError, ServiceBusError
 
-from app.common import AsyncNewsMonitor
+from app.common.news_monitor import AsyncNewsMonitor
 from .config import AsyncServiceBusPublisher, decode_message_body, settings
 from .workflow.generate_insight import InsightState, build_insight_graph
 from .workflow.hnw import HNWState, build_hnw_graph

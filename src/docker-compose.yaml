@@ -1,3 +1,5 @@
+name: SMIF-v1
+
 networks:
   finance-net:
     driver: bridge
@@ -51,10 +53,10 @@ services:
       - "10253:10253"
       - "10254:10254"
     environment:
-      - AZURE_COSMOS_EMULATOR_PARTITION_COUNT=10
+      - AZURE_COSMOS_EMULATOR_PARTITION_COUNT=3
       - AZURE_COSMOS_EMULATOR_ENABLE_DATA_PERSISTENCE=true
       - PROTOCOL=https
-      - EXPLORER_PROTOCOL=https-insecure
+      - EXPLORER_PROTOCOL=https
       - GATEWAY_PUBLIC_ENDPOINT=cosmos-emulator
       # - AZURE_COSMOS_EMULATOR_IP_ADDRESS_OVERRIDE=127.0.0.1
     volumes:
@@ -71,7 +73,7 @@ services:
       start_period: 10s
 
   # EventHub Emulator
-  # Requires: infra/eventhub-config.json
+  # Requires: app/common/azure_services/eventhub-config.json
   eventhub:
     image: mcr.microsoft.com/azure-messaging/eventhubs-emulator:latest
     container_name: eventhub-emulator
@@ -80,7 +82,7 @@ services:
       - "127.0.0.1:5672:5672"     # AMQP for local Functions host
       - "127.0.0.1:9092:9092"
     volumes:
-      - ./app/common/eventhub-config.json:/Eventhubs_Emulator/ConfigFiles/Config.json
+      - ./app/common/azure_services/eventhub-config.json:/Eventhubs_Emulator/ConfigFiles/Config.json
     environment:
       - ACCEPT_EULA=Y
       - BLOB_SERVER=azurite
@@ -99,7 +101,7 @@ services:
       - "127.0.0.2:5672:5672"     # AMQP for local Functions host
       - "127.0.0.2:5300:5300"     # Management and health APIs
     volumes:
-      - ./app/common/servicebus-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
+      - ./app/common/azure_services/servicebus-config.json:/ServiceBus_Emulator/ConfigFiles/Config.json:ro
     environment:
       - SQL_SERVER=mssql
       - MSSQL_SA_PASSWORD=${MSSQL_SA_PASSWORD:-ServiceBus_Emulator_123!}
@@ -238,6 +240,8 @@ services:
       - "7071:80"
     env_file:
       - .env.docker
+    volumes:
+      - ./.env.docker:/app/.env:ro
     depends_on:
       azurite:
         condition: service_healthy
