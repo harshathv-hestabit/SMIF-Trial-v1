@@ -8,7 +8,7 @@ from app.modules.DPS.config.settings import settings
 
 INDEX = "clients"
 DIM = 384
-EMBEDDING_MODEL = "models/gemini-embedding-001"
+EMBEDDING_MODEL = "models/gemini-embedding-2-preview"
 
 INDEX_PROPERTIES = {
     "client_id": {"type": "keyword"},

@@ -12,6 +12,7 @@ from .settings import settings
 
 _PROVIDER_CLIENTS = {
     "openai": ChatOpenAI,
+    "nvidia": ChatOpenAI,
     "gemini": ChatGoogleGenerativeAI,
 }
 
@@ -60,10 +61,10 @@ class LLMClient:
             raw_entries = [
                 {
                     "name": "primary",
-                    "model": "moonshotai/kimi-k2-instruct",
-                    "provider": "openai",
-                    "api_key": settings.GROQ_API_KEY,
-                    "base_url": settings.GROQ_BASE_URL,
+                    "model": "meta/llama-3.1-70b-instruct",
+                    "provider": "nvidia",
+                    "api_key": settings.LLM_API_KEY,
+                    "base_url": settings.LLM_BASE_URL,
                     "rpm": 30,
                     "concurrency": 2,
                     "temperature": settings.LLM_TEMPERATURE,
@@ -82,10 +83,10 @@ class LLMClient:
 
     @staticmethod
     def _default_provider_kwargs(provider: str) -> dict[str, Any]:
-        if provider == "openai":
+        if provider in {"openai", "nvidia"}:
             return {
-                "api_key": settings.GROQ_API_KEY,
-                "base_url": settings.GROQ_BASE_URL,
+                "api_key": settings.LLM_API_KEY,
+                "base_url": settings.LLM_BASE_URL,
                 "temperature": settings.LLM_TEMPERATURE,
             }
 
@@ -102,7 +103,7 @@ class LLMClient:
         if not isinstance(entry, dict):
             raise ValueError(f"LLM pool entry at index {index} must be an object")
 
-        provider = str(entry.get("provider", "openai")).lower()
+        provider = str(entry.get("provider", "nvidia")).lower()
         client_cls = _PROVIDER_CLIENTS.get(provider)
         if client_cls is None:
             supported = ", ".join(sorted(_PROVIDER_CLIENTS))

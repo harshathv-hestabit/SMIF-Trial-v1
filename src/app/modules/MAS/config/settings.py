@@ -1,10 +1,18 @@
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from app.common.azure_services.settings import AzureServiceEmulatorSettings
 
 
 class Settings(AzureServiceEmulatorSettings):
-    GROQ_BASE_URL: str = Field(..., description="Groq API base URL")
-    GROQ_API_KEY: str = Field(..., description="Groq API key")
+    LLM_BASE_URL: str = Field(
+        ...,
+        description="OpenAI-compatible LLM API base URL",
+        validation_alias=AliasChoices("LLM_BASE_URL", "GROQ_BASE_URL"),
+    )
+    LLM_API_KEY: str = Field(
+        ...,
+        description="OpenAI-compatible LLM API key",
+        validation_alias=AliasChoices("LLM_API_KEY", "GROQ_API_KEY"),
+    )
     LLM_POOL_CONFIG: str = Field(
         default="",
         description="JSON array describing the LLM backend pool",

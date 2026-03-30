@@ -9,7 +9,7 @@ from .settings import settings
 
 INDEX = "clients"
 DIM = 384
-EMBEDDING_MODEL = "models/gemini-embedding-001"
+EMBEDDING_MODEL = "models/gemini-embedding-2-preview"
 
 es = Elasticsearch(settings.ELASTICSEARCH_URL, verify_certs=False)
 query_embedder = GoogleGenerativeAIEmbeddings(
