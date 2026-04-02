@@ -1,0 +1,6 @@
+azure-core==1.38.2
+azure-cosmos==4.9.0
+azure-eventhub==5.15.1
+azure-eventhub-checkpointstoreblob-aio==1.2.0
+azure-storage-blob==12.28.0
+pymongo==4.16.0

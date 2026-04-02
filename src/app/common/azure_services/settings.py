@@ -18,6 +18,12 @@ class AzureServiceEmulatorSettings(BaseSettings):
     COSMOS_URL: str = Field(..., description="Cosmos DB endpoint")
     COSMOS_KEY: str = Field(..., description="Cosmos DB key")
     COSMOS_DB: str = Field(..., description="Cosmos DB name")
+    MONGO_BACKUP_ENABLED: bool = Field(
+        False,
+        description="Mirror successful Cosmos upserts into MongoDB as a backup store",
+    )
+    MONGO_URI: str = Field("", description="MongoDB connection URI for backup writes")
+    MONGO_DB: str = Field("", description="MongoDB database name for backup writes")
     NEWS_CONTAINER: str = Field(..., description="News Container Name")
     CLIENT_PORTFOLIO_CONTAINER: str = Field(..., description="Client Portfolio Container Name")
     INSIGHTS_CONTAINER: str = Field(..., description="Insights Container Name")

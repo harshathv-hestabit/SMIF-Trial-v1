@@ -113,6 +113,8 @@ Most Python services load environment variables from `src/.env`.
 
 Docker Compose uses `src/.env.docker`.
 
+When `MONGO_BACKUP_ENABLED=true`, Docker startup restores Mongo backup data into the Cosmos emulator through the one-shot `backup_copy` service before Cosmos-dependent services are started.
+
 If you run Azure Functions outside Docker, use [src/app/functions/local.settings.json.example](/home/harshathvenkastesh/Desktop/SMIF/src/app/functions/local.settings.json.example) as the template for `local.settings.json`.
 
 Important variables used across the current codebase:
@@ -135,6 +137,12 @@ From `src/`:
 ```bash
 docker compose up --build
 ```
+
+Startup order for Cosmos-backed services is:
+
+- `cosmos-emulator`
+- `backup_copy`
+- application services such as `functions`, `mas`, `ui-api`, `dps_news_processor`, and `dps_client_processor`
 
 Primary local endpoints:
 

@@ -1,0 +1,4 @@
+aiohttp==3.13.3
+azure-eventhub==5.15.1
+fastapi==0.135.2
+uvicorn==0.42.0

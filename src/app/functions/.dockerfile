@@ -13,13 +13,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir \
-    azure-functions==1.24.0 \
-    azure-servicebus==7.14.2 \
-    azure-cosmos==4.9.0 \
-    pydantic==2.12.5 \
-    pydantic-settings==2.13.1 \
-    pydantic_core==2.41.5 
+COPY requirements.txt ./requirements.txt
+COPY requirements ./requirements
+RUN pip install --no-cache-dir -r requirements.txt -r requirements/functions.txt
 
 
 COPY app/__init__.py ./app/__init__.py

@@ -9,6 +9,7 @@ from app.common.azure_services.cosmos import (
     get_container_client,
     get_database_client,
 )
+from app.common.mongo_backup import backup_document_async, backup_document_sync
 
 
 TIMELINE_LIMIT = 50
@@ -136,11 +137,14 @@ class SyncNewsMonitor:
     def __init__(
         self,
         *,
+        settings: Any | None = None,
         cosmos_url: str,
         cosmos_key: str,
         cosmos_db: str,
         news_container: str,
     ) -> None:
+        self._settings = settings
+        self._news_container_name = news_container
         self._client = build_sync_cosmos_client(cosmos_url, cosmos_key)
         self._container = get_container_client(
             get_database_client(self._client, cosmos_db),
@@ -167,6 +171,12 @@ class SyncNewsMonitor:
         )
         update_news_lifecycle(document, stage=stage, status=status, details=details)
         self._container.upsert_item(document)
+        if self._settings is not None:
+            backup_document_sync(
+                self._settings,
+                collection_name=self._news_container_name,
+                document=document,
+            )
         return document
 
 
@@ -174,11 +184,14 @@ class AsyncNewsMonitor:
     def __init__(
         self,
         *,
+        settings: Any | None = None,
         cosmos_url: str,
         cosmos_key: str,
         cosmos_db: str,
         news_container: str,
     ) -> None:
+        self._settings = settings
+        self._news_container_name = news_container
         self._client = build_async_cosmos_client(cosmos_url, cosmos_key)
         self._database = get_database_client(self._client, cosmos_db)
         self._container = get_container_client(self._database, news_container)
@@ -203,4 +216,10 @@ class AsyncNewsMonitor:
         )
         update_news_lifecycle(document, stage=stage, status=status, details=details)
         await self._container.upsert_item(document)
+        if self._settings is not None:
+            await backup_document_async(
+                self._settings,
+                collection_name=self._news_container_name,
+                document=document,
+            )
         return document

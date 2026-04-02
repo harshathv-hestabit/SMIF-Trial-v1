@@ -72,6 +72,23 @@ services:
       retries: 2
       start_period: 10s
 
+  backup_copy:
+    build:
+      context: .
+      dockerfile: app/modules/BACKUP_COPY/.dockerfile
+    container_name: backup-copy
+    hostname: backup-copy
+    env_file:
+      - .env.docker
+    volumes:
+      - ./.env.docker:/app/.env:ro
+    depends_on:
+      cosmos-emulator:
+        condition: service_healthy
+    networks:
+      - finance-net
+    restart: "no"
+
   eventhub:
     image: mcr.microsoft.com/azure-messaging/eventhubs-emulator:latest
     container_name: eventhub-emulator
@@ -163,7 +180,6 @@ services:
   #     - --server.port=8501
   #   volumes:
   #     - ./.env.docker:/app/.env:ro
-  #     - ./requirements.txt:/app/requirements.txt:ro
   #   depends_on:
   #     azurite:
   #       condition: service_healthy
@@ -189,12 +205,11 @@ services:
       - .env.docker
     volumes:
       - ./.env.docker:/app/.env:ro
-      - ./requirements.txt:/app/requirements.txt:ro
     depends_on:
       azurite:
         condition: service_healthy
-      cosmos-emulator:
-        condition: service_healthy
+      backup_copy:
+        condition: service_completed_successfully
       servicebus-emulator:
         condition: service_started
     networks:
@@ -213,7 +228,6 @@ services:
   #     - .env.docker
   #   volumes:
   #     - ./.env.docker:/app/.env:ro
-  #     - ./requirements.txt:/app/requirements.txt:ro
   #   depends_on:
   #     cosmos-emulator:
   #       condition: service_healthy
@@ -239,10 +253,9 @@ services:
       - .env.docker
     volumes:
       - ./.env.docker:/app/.env:ro
-      - ./requirements.txt:/app/requirements.txt:ro
     depends_on:
-      cosmos-emulator:
-        condition: service_healthy
+      backup_copy:
+        condition: service_completed_successfully
     networks:
       - finance-net
     restart: on-failure
@@ -277,8 +290,8 @@ services:
     depends_on:
       azurite:
         condition: service_healthy
-      cosmos-emulator:
-        condition: service_healthy
+      backup_copy:
+        condition: service_completed_successfully
       servicebus-emulator:
         condition: service_started
     networks:
@@ -314,12 +327,11 @@ services:
       - .env.docker
     volumes:
       - ./.env.docker:/app/.env:ro
-      - ./requirements.txt:/app/requirements.txt:ro
     depends_on:
       azurite:
         condition: service_healthy
-      cosmos-emulator:
-        condition: service_healthy
+      backup_copy:
+        condition: service_completed_successfully
       eventhub:
         condition: service_started
     networks:
@@ -336,11 +348,10 @@ services:
       - .env.docker
     volumes:
       - ./.env.docker:/app/.env:ro
-      - ./requirements.txt:/app/requirements.txt:ro
       - ./app/modules/DPS/services/client_processor/portfolio.csv:/app/app/modules/DPS/services/client_processor/portfolio.csv:ro
     depends_on:
-      cosmos-emulator:
-        condition: service_healthy
+      backup_copy:
+        condition: service_completed_successfully
     networks:
       - finance-net
     restart: on-failure

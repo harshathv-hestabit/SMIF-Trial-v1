@@ -8,6 +8,7 @@ from app.common.azure_services.cosmos import (
     get_container_client,
     get_database_client,
 )
+from app.common.mongo_backup import backup_document_async
 from app.common.news_monitor import preserve_news_monitoring
 from .settings import settings
 
@@ -63,6 +64,11 @@ class CosmosAsyncClient:
 
         preserve_news_monitoring(doc, existing)
         await self.container.upsert_item(doc)
+        await backup_document_async(
+            settings,
+            collection_name=settings.NEWS_CONTAINER,
+            document=doc,
+        )
                 
     async def read_document(self, doc_id, partition_key):
         return await self.container.read_item(doc_id, partition_key)

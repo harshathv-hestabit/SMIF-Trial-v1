@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Iterable
 
 import azure.functions as func
@@ -23,6 +24,11 @@ class QueuePublisher:
         self._connection_string = os.environ["SERVICEBUS_CONNECTION_STRING"]
         self._queue_name = os.environ["QUEUE_REALTIME_NEWS"]
         self._monitor = SyncNewsMonitor(
+            settings=SimpleNamespace(
+                MONGO_BACKUP_ENABLED=os.environ.get("MONGO_BACKUP_ENABLED", "false").lower() == "true",
+                MONGO_URI=os.environ.get("MONGO_URI", ""),
+                MONGO_DB=os.environ.get("MONGO_DB", ""),
+            ),
             cosmos_url=os.environ["COSMOS_URL"],
             cosmos_key=os.environ["COSMOS_KEY"],
             cosmos_db=os.environ["COSMOS_DB"],
