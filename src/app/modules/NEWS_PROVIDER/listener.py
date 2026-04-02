@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 BENZINGA_NEWS_URL = "https://api.benzinga.com/api/v2/news"
 POLL_INTERVAL_SECONDS = 60
 POLL_OVERLAP_SECONDS = 60
-PAGE_SIZE = 10
+PAGE_SIZE = 20
 REQUEST_TIMEOUT_SECONDS = 30
 
 
