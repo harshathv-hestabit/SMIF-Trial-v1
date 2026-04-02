@@ -1,11 +1,13 @@
-import asyncio
 import logging
 
 from ..config import ServiceBusPublisher, build_event_payload, settings
-from .insight_job_state import build_job_key, mark_job_queued
 
 
 logger = logging.getLogger(__name__)
+
+
+def _build_job_key(client_id: str, news_doc_id: str) -> str:
+    return f"generate_insight:{client_id}:{news_doc_id}"
 
 
 class EventExecutor:
@@ -28,7 +30,7 @@ class EventExecutor:
                 logger.warning("insight_event_skip_missing_identifiers payload=%s", event_payload)
                 continue
 
-            job_key = build_job_key(client_id, news_doc_id)
+            job_key = _build_job_key(client_id, news_doc_id)
             if job_key in seen_job_keys:
                 logger.info("insight_event_skip_duplicate_in_batch job_key=%s", job_key)
                 continue
@@ -41,11 +43,6 @@ class EventExecutor:
                 f"insight-{client_id}-{news_doc_id}"
             )
             event_payload["message_id"] = message_id
-
-            should_enqueue = asyncio.run(mark_job_queued(event_payload))
-            if not should_enqueue:
-                logger.info("insight_event_skip_duplicate_job_state job_key=%s", job_key)
-                continue
 
             payload = build_event_payload(
                 "generate_insight",

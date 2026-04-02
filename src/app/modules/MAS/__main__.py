@@ -8,12 +8,6 @@ from azure.servicebus.exceptions import MessageLockLostError
 from app.common.news_monitor import AsyncNewsMonitor
 from .config import AsyncServiceBusPublisher, decode_message_body, settings
 from .util.insight_logging import append_insight_log, initialize_insight_log
-from .util.insight_job_state import (
-    build_job_key,
-    claim_job_for_processing,
-    mark_job_completed,
-    mark_job_failed,
-)
 from .workflow.generate_insight import InsightState, build_insight_graph
 from .workflow.hnw import HNWState, build_hnw_graph
 from .workflow.standard import StandardState, build_standard_graph
@@ -36,6 +30,10 @@ SERVICEBUS_MAX_RECONNECT_DELAY_SECONDS = 30
 hnw_graph = build_hnw_graph()
 standard_graph = build_standard_graph()
 insight_graph = build_insight_graph()
+
+
+def build_job_key(client_id: str, news_doc_id: str) -> str:
+    return f"generate_insight:{client_id}:{news_doc_id}"
 
 
 async def run_hnw_workflow(event_body: dict) -> dict:
@@ -89,6 +87,7 @@ async def run_generate_insight_workflow(event_body: dict) -> dict:
     job_key = str(event_body.get("job_key") or build_job_key(client_id, str(news_doc_id)))
     partition_key = event_body.get("partition_key", news_doc_id)
     news_monitor = AsyncNewsMonitor(
+        settings=settings,
         cosmos_url=settings.COSMOS_URL,
         cosmos_key=settings.COSMOS_KEY,
         cosmos_db=settings.COSMOS_DB,
@@ -116,13 +115,22 @@ async def run_generate_insight_workflow(event_body: dict) -> dict:
         "client_id": client_id,
         "news_document": event_body.get("news_document", {}),
         "client_portfolio_document": event_body.get("client_portfolio_document", {}),
+        "matched_isins": event_body.get("matched_isins", []),
+        "matched_tags": event_body.get("matched_tags", []),
+        "relevance_score": float(event_body.get("relevance_score", 0.0) or 0.0),
         "job_key": job_key,
         "log_file_path": log_file_path,
         "insight_draft": "",
         "verification_score": 0.0,
         "verification_feedback": "",
+        "verification_full_feedback": "",
+        "revision_guidance": {},
         "iterations": 0,
         "status": "pending",
+        "compact_portfolio_context": {},
+        "compact_portfolio_profile": {},
+        "precheck_passed": False,
+        "precheck_reason": "",
         "token_usage": {
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -319,35 +327,6 @@ async def handle_queue_message(
         )
 
         if workflow_name == "generate_insight":
-            claim = await claim_job_for_processing(
-                event_body=event_body,
-                message_id=message_id,
-                delivery_count=delivery_count,
-                locked_until_utc=locked_until_utc,
-            )
-            decision = claim["decision"]
-            event_body["job_key"] = claim["job_key"]
-            job_key = claim["job_key"]
-            if decision != "process":
-                logger.info(
-                    "message_duplicate_skip queue=%s workflow=%s message_id=%s delivery_count=%s client_id=%s news_doc_id=%s job_key=%s decision=%s",
-                    queue_name,
-                    workflow_name,
-                    message_id,
-                    delivery_count,
-                    client_id,
-                    news_doc_id,
-                    job_key,
-                    decision,
-                )
-                await _safe_complete_message(
-                    receiver,
-                    message,
-                    queue_name=queue_name,
-                    workflow_name=workflow_name,
-                )
-                return
-
             lock_renewer = AutoLockRenewer()
             lock_renewer.register(
                 receiver=receiver,
@@ -355,15 +334,7 @@ async def handle_queue_message(
                 max_lock_renewal_duration=settings.SERVICEBUS_MAX_LOCK_RENEWAL_SECONDS,
             )
 
-        result = await config["handler"](event_body)
-
-        if workflow_name == "generate_insight":
-            await mark_job_completed(
-                event_body=event_body,
-                message_id=message_id,
-                delivery_count=delivery_count,
-                result=result,
-            )
+        await config["handler"](event_body)
         await _safe_complete_message(
             receiver,
             message,
@@ -371,15 +342,6 @@ async def handle_queue_message(
             workflow_name=workflow_name,
         )
     except Exception as exc:
-        event_body = locals().get("event_body", {})
-        workflow_name = str(config["workflow_name"])
-        if workflow_name == "generate_insight" and isinstance(event_body, dict):
-            await mark_job_failed(
-                event_body=event_body,
-                message_id=message_id,
-                delivery_count=delivery_count,
-                error=exc,
-            )
         if delivery_count >= settings.SERVICEBUS_MAX_DELIVERY_ATTEMPTS:
             await _safe_dead_letter_message(
                 receiver,

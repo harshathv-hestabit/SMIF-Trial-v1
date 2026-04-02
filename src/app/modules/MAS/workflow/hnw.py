@@ -5,6 +5,7 @@ from app.common.azure_services.cosmos import (
     get_container_client,
     get_database_client,
 )
+from app.common.mongo_backup import backup_document_sync
 from app.common.news_monitor import merge_news_monitoring, update_news_lifecycle
 from ..config import process_news_stream, settings
 from ..util import EventExecutor
@@ -44,6 +45,11 @@ def _record_news_stage(
     merge_news_monitoring(news_doc, latest_doc)
     update_news_lifecycle(news_doc, stage=stage, status=status, details=details)
     news_container.upsert_item(news_doc)
+    backup_document_sync(
+        settings,
+        collection_name=settings.NEWS_CONTAINER,
+        document=news_doc,
+    )
 
 
 def fetch_news_document(state: HNWState) -> HNWState:
@@ -81,7 +87,7 @@ def filter_candidates(state: HNWState) -> HNWState:
         for client in matched_clients:
             cid = client["client_id"]
 
-            if cid not in seen and client["relevance_score"] >= RELEVANCE_THRESHOLD:
+            if cid not in seen:
                 seen.add(cid)
                 candidates.append(client)
     state["candidate_clients"] = candidates

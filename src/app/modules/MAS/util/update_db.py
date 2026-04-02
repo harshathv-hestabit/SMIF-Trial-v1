@@ -1,7 +1,11 @@
 from datetime import datetime
 from app.common.azure_services.cosmos import build_async_cosmos_client, ensure_async_container
+from app.common.mongo_backup import backup_document_async
 from ..config import settings
-from .insight_job_state import build_insight_document_id
+
+
+def build_insight_document_id(client_id: str, news_doc_id: str | None) -> str:
+    return f"insight:{client_id}:{news_doc_id or 'unknown'}"
 
 
 async def update_db(state: dict):
@@ -32,3 +36,8 @@ async def update_db(state: dict):
         }
 
         await container.upsert_item(doc)
+        await backup_document_async(
+            settings,
+            collection_name=settings.INSIGHTS_CONTAINER,
+            document=doc,
+        )
