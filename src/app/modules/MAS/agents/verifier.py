@@ -171,7 +171,7 @@ async def verify_insight_agent(state: dict) -> dict:
     news = state["news_document"]
     portfolio = state["client_portfolio_document"]
     insight = state["insight_draft"]
-    matched_symbols = state.get("matched_isins", [])
+    matched_symbols = state.get("matched_tickers") or state.get("matched_isins", [])
 
     compact_context = state.get("compact_portfolio_context")
     compact_profile = state.get("compact_portfolio_profile")
@@ -202,6 +202,7 @@ CLIENT PORTFOLIO SNAPSHOT
 - Classification Weights: {compact_context.get("classification_weights")}
 - Asset Type Weights: {compact_context.get("asset_type_weights")}
 - Currencies (top): {compact_context.get("currencies")}
+- Grounded Relevance: {compact_context.get("grounded_relevance")}
 
 NEWS-RELEVANT HOLDINGS (FILTERED)
 {holdings_text}

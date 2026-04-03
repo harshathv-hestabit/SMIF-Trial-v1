@@ -1,9 +1,10 @@
 from collections import defaultdict
-import math
 import re
 
 from elasticsearch import Elasticsearch
 from langchain_google_genai import GoogleGenerativeAIEmbeddings
+
+from app.common.portfolio_schema import SEARCH_RELEVANCE_PROFILE
 
 from .settings import settings
 
@@ -111,15 +112,8 @@ BROAD_MACRO_PATTERNS = (
 TOKEN_PATTERN = re.compile(r"[A-Z0-9][A-Z0-9&/+\-_.]{1,}")
 
 
-def _normalize_embedding(vector: list[float]) -> list[float]:
-    magnitude = math.sqrt(sum(value * value for value in vector))
-    if not magnitude:
-        return vector
-    return [value / magnitude for value in vector]
-
-
 def _embed_query(text: str) -> list[float]:
-    return _normalize_embedding(query_embedder.embed_query(text))
+    return query_embedder.embed_query(text)
 
 
 def _news_to_text(doc: dict) -> str:
@@ -195,19 +189,43 @@ def _is_broad_macro_news(*, topic_text: str, news_tags: list[str]) -> bool:
     return any(pattern.upper() in haystack for pattern in BROAD_MACRO_PATTERNS)
 
 
+def _build_client_segment_filter(client_segments: list[str] | None) -> dict | None:
+    normalized = sorted(
+        {
+            str(segment).strip().lower()
+            for segment in (client_segments or [])
+            if str(segment).strip()
+        }
+    )
+    if not normalized:
+        return None
+    return {"terms": {"client_segment": normalized}}
+
+
+def _compose_filter(
+    segment_filter: dict | None,
+    client_ids: list[str] | None = None,
+) -> list[dict]:
+    filters: list[dict] = [
+        {"term": {"representation_type": SEARCH_RELEVANCE_PROFILE}},
+    ]
+    if segment_filter:
+        filters.append(segment_filter)
+    if client_ids:
+        filters.append({"terms": {"client_id": client_ids}})
+    return filters
+
+
 def _fetch_client_documents(
     *,
     client_segments: list[str] | None,
     size: int,
 ) -> list[dict]:
-    segment_filter = _build_client_segment_filter(client_segments)
-    query: dict = {"match_all": {}}
-    if segment_filter:
-        query = {"bool": {"filter": [segment_filter]}}
+    filters = _compose_filter(_build_client_segment_filter(client_segments))
     response = es.search(
         index=INDEX,
         size=size,
-        query=query,
+        query={"bool": {"filter": filters}},
         source={"excludes": ["embedding"]},
         sort=[{"client_id": "asc"}],
     )
@@ -217,12 +235,20 @@ def _fetch_client_documents(
 def _build_prefilter_signal(client_doc: dict, news_features: dict) -> dict:
     client_tickers = {
         _normalize_ticker(ticker)
-        for ticker in client_doc.get("ticker_symbols", [])
+        for ticker in (
+            client_doc.get("major_tickers")
+            or client_doc.get("ticker_symbols")
+            or []
+        )
         if _normalize_ticker(ticker)
     }
     client_tags = {
         _normalize_keyword(tag)
-        for tag in client_doc.get("tags_of_interest", [])
+        for tag in (
+            client_doc.get("broad_tags_of_interest")
+            or client_doc.get("tags_of_interest")
+            or []
+        )
         if _normalize_keyword(tag)
     }
     client_classifications = {
@@ -282,27 +308,15 @@ def _prefilter_candidates(
     return signals_by_client, eligible_ids
 
 
-def _compose_filter(
-    segment_filter: dict | None,
-    client_ids: list[str] | None = None,
-) -> list[dict]:
-    filters: list[dict] = []
-    if segment_filter:
-        filters.append(segment_filter)
-    if client_ids:
-        filters.append({"terms": {"client_id": client_ids}})
-    return filters
-
-
 def _build_bm25_query(news_features: dict, filters: list[dict]) -> dict:
     should: list[dict] = []
     if news_features["news_tickers"]:
         should.append(
-            {"terms": {"ticker_symbols": news_features["news_tickers"], "boost": 8.0}}
+            {"terms": {"major_tickers": news_features["news_tickers"], "boost": 8.0}}
         )
     if news_features["news_tags"]:
         should.append(
-            {"terms": {"tags_of_interest": news_features["news_tags"], "boost": 5.0}}
+            {"terms": {"broad_tags_of_interest": news_features["news_tags"], "boost": 5.0}}
         )
     if news_features["news_classifications"]:
         should.append(
@@ -318,16 +332,25 @@ def _build_bm25_query(news_features: dict, filters: list[dict]) -> dict:
             [
                 {
                     "match": {
-                        "asset_descriptions": {
+                        "major_asset_descriptions": {
                             "query": news_features["topic_text"],
                             "operator": "and",
-                            "boost": 1.2,
+                            "boost": 1.3,
                         }
                     }
                 },
                 {
                     "match": {
-                        "query": {
+                        "major_issuers": {
+                            "query": news_features["topic_text"],
+                            "minimum_should_match": "70%",
+                            "boost": 1.1,
+                        }
+                    }
+                },
+                {
+                    "match": {
+                        "compact_summary_text": {
                             "query": news_features["topic_text"],
                             "minimum_should_match": "70%",
                             "boost": 0.8,
@@ -358,10 +381,8 @@ def _run_hybrid_retrieval(
         "query_vector": _embed_query(news_features["news_text"]),
         "k": retrieval_k,
         "num_candidates": max(retrieval_k * 4, retrieval_k),
+        "filter": filters,
     }
-    if filters:
-        knn_query["filter"] = filters
-
     knn_response = es.search(
         index=INDEX,
         size=retrieval_k,
@@ -377,7 +398,7 @@ def _run_hybrid_retrieval(
     return knn_response, bm25_response
 
 
-def _build_selection_reason(signal: dict, score: float, semantic_only: bool) -> str:
+def _build_selection_reasons(signal: dict, score: float, semantic_only: bool) -> list[str]:
     reasons: list[str] = []
     if signal["has_direct_ticker_match"]:
         reasons.append(f"ticker_overlap={signal['ticker_overlap_count']}")
@@ -392,7 +413,7 @@ def _build_selection_reason(signal: dict, score: float, semantic_only: bool) -> 
     if semantic_only:
         reasons.append("semantic_fallback")
     reasons.append(f"hybrid_rank_score={score:.4f}")
-    return ", ".join(reasons)
+    return reasons
 
 
 def _dedupe_hits_by_client(hits: list[dict]) -> list[dict]:
@@ -415,11 +436,6 @@ def score_news_against_clients(
     retrieval_k: int | None = None,
     final_top_n: int | None = None,
 ) -> list[dict]:
-    """Return only candidates worth downstream generation to reduce token waste.
-
-    Hybrid search is kept for ranking, but deterministic overlaps are used first to
-    cheaply narrow the pool and semantic-only fallbacks are held to a stricter bar.
-    """
     retrieval_limit = max(
         int(retrieval_k or top_k or settings.RELEVANCE_RETRIEVAL_K),
         1,
@@ -523,29 +539,28 @@ def score_news_against_clients(
         if not keep_candidate:
             continue
 
+        candidate_reasons = _build_selection_reasons(
+            signal,
+            normalized_score,
+            semantic_only,
+        )
         kept_results.append(
             {
                 "client_id": client_id,
                 "client_name": source["client_name"],
+                "candidate_score": normalized_score,
                 "relevance_score": normalized_score,
-                "has_direct_ticker_match": signal["has_direct_ticker_match"],
-                "has_tag_overlap": signal["has_tag_overlap"],
-                "has_classification_overlap": signal["has_classification_overlap"],
-                "has_mandate_fit": signal["has_mandate_fit"],
-                "ticker_overlap_count": signal["ticker_overlap_count"],
-                "tag_overlap_count": signal["tag_overlap_count"],
-                "classification_overlap_count": signal["classification_overlap_count"],
+                "candidate_reasons": candidate_reasons,
+                "selection_reason": ", ".join(candidate_reasons),
                 "matched_tickers": signal["matched_tickers"],
-                "matched_isins": signal["matched_tickers"],
                 "matched_tags": signal["matched_tags"],
                 "matched_classifications": signal["matched_classifications"],
-                "selection_reason": _build_selection_reason(
-                    signal,
-                    normalized_score,
-                    semantic_only,
+                "profile_snapshot_id": source.get("snapshot_id"),
+                "classification_weights": source.get(
+                    "asset_class_weights",
+                    source.get("classification_weights", {}),
                 ),
-                "classification_weights": source.get("classification_weights", {}),
-                "client_portfolio_document": source,
+                "search_relevance_profile": source,
             }
         )
 
@@ -558,13 +573,13 @@ def score_news_against_clients(
     results = sorted(
         kept_results,
         key=lambda item: (
-            not item["has_direct_ticker_match"],
-            not item["has_tag_overlap"],
-            not item["has_classification_overlap"],
-            -item["ticker_overlap_count"],
-            -item["tag_overlap_count"],
-            -item["classification_overlap_count"],
-            -item["relevance_score"],
+            not bool(item["matched_tickers"]),
+            not bool(item["matched_tags"]),
+            not bool(item["matched_classifications"]),
+            -len(item["matched_tickers"]),
+            -len(item["matched_tags"]),
+            -len(item["matched_classifications"]),
+            -item["candidate_score"],
         ),
     )[:final_cap]
 
@@ -583,8 +598,8 @@ def score_news_against_clients(
         print(
             "[Relevance] "
             f"selected_client={selected['client_id']} "
-            f"score={selected['relevance_score']} "
-            f"reason={selected['selection_reason']}"
+            f"score={selected['candidate_score']} "
+            f"reasons={selected['selection_reason']}"
         )
 
     return results
@@ -612,16 +627,3 @@ def process_news_stream(
         if matched_clients:
             results[news_id] = matched_clients
     return results
-
-
-def _build_client_segment_filter(client_segments: list[str] | None) -> dict | None:
-    normalized = sorted(
-        {
-            str(segment).strip().lower()
-            for segment in (client_segments or [])
-            if str(segment).strip()
-        }
-    )
-    if not normalized:
-        return None
-    return {"terms": {"client_segment": normalized}}

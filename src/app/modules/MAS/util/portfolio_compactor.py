@@ -18,6 +18,52 @@ def _normalize_symbol(value: object | None) -> str:
 
 
 def _build_holdings(portfolio: dict[str, Any]) -> list[dict[str, str]]:
+    matched_holdings = portfolio.get("matched_holdings") or portfolio.get("relevant_holdings") or []
+    if isinstance(matched_holdings, list) and matched_holdings:
+        holdings: list[dict[str, str]] = []
+        for holding in matched_holdings:
+            if not isinstance(holding, dict):
+                continue
+            ticker_value = (
+                holding.get("ticker")
+                or holding.get("underlying_ticker")
+                or ""
+            )
+            ticker = str(ticker_value or "").strip()
+            if not ticker:
+                continue
+            description = str(holding.get("description") or "").strip()
+            holdings.append(
+                {
+                    "ticker": ticker,
+                    "description": description,
+                    "symbol": _normalize_symbol(ticker),
+                }
+            )
+        if holdings:
+            return holdings
+
+    canonical_holdings = portfolio.get("holdings") or []
+    if isinstance(canonical_holdings, list) and canonical_holdings:
+        holdings: list[dict[str, str]] = []
+        for holding in canonical_holdings:
+            if not isinstance(holding, dict):
+                continue
+            ticker_value = holding.get("ticker") or holding.get("underlying_ticker") or ""
+            ticker = str(ticker_value or "").strip()
+            if not ticker:
+                continue
+            description = str(holding.get("description") or "").strip()
+            holdings.append(
+                {
+                    "ticker": ticker,
+                    "description": description,
+                    "symbol": _normalize_symbol(ticker),
+                }
+            )
+        if holdings:
+            return holdings
+
     tickers = portfolio.get("ticker_symbols") or []
     descriptions = portfolio.get("asset_descriptions") or []
 
@@ -89,9 +135,12 @@ def _raw_portfolio_char_estimate(portfolio: dict[str, Any]) -> int:
         "currencies": portfolio.get("currencies"),
         "isins": portfolio.get("isins"),
         "ticker_symbols": portfolio.get("ticker_symbols"),
+        "major_tickers": portfolio.get("major_tickers"),
         "asset_descriptions": portfolio.get("asset_descriptions"),
-        "classification_weights": portfolio.get("classification_weights"),
+        "classification_weights": portfolio.get("classification_weights") or portfolio.get("asset_class_weights"),
         "asset_type_weights": portfolio.get("asset_type_weights"),
+        "matched_holdings": portfolio.get("matched_holdings"),
+        "relevant_holdings": portfolio.get("relevant_holdings"),
     }
     return len(json.dumps(fields, ensure_ascii=False, separators=(",", ":")))
 
@@ -146,7 +195,9 @@ def build_compact_portfolio_context(
         "mandate": str(portfolio.get("mandate") or ""),
         "total_aum_aed": _safe_float(portfolio.get("total_aum_aed")),
         "asset_type_weights": portfolio.get("asset_type_weights") or {},
-        "classification_weights": portfolio.get("classification_weights") or {},
+        "classification_weights": portfolio.get("classification_weights")
+        or portfolio.get("asset_class_weights")
+        or {},
         "currencies": _trim_list(portfolio.get("currencies"), max_currencies),
         "relevant_holdings": [
             {
@@ -156,6 +207,7 @@ def build_compact_portfolio_context(
             for holding in selected
         ],
         "news_symbol_overlap": sorted(news_symbols & matched_symbols),
+        "grounded_relevance": str(portfolio.get("grounded_relevance") or ""),
     }
 
     compact_chars = len(json.dumps(compact, ensure_ascii=False, separators=(",", ":")))
@@ -169,9 +221,13 @@ def build_compact_portfolio_context(
         "estimated_char_savings": savings,
         "estimated_char_savings_pct": savings_pct,
         "raw_counts": {
-            "tickers": len(portfolio.get("ticker_symbols") or []),
+            "tickers": len(portfolio.get("ticker_symbols") or portfolio.get("major_tickers") or []),
             "isins": len(portfolio.get("isins") or []),
-            "asset_descriptions": len(portfolio.get("asset_descriptions") or []),
+            "asset_descriptions": len(
+                portfolio.get("asset_descriptions")
+                or portfolio.get("major_asset_descriptions")
+                or []
+            ),
             "currencies": len(portfolio.get("currencies") or []),
         },
         "compact_counts": {

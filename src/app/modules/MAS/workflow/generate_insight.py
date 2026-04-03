@@ -11,9 +11,13 @@ class InsightState(TypedDict):
     client_id: str
     news_document: dict
     client_portfolio_document: dict
-    matched_isins: list[str]
+    matched_tickers: list[str]
     matched_tags: list[str]
+    matched_holdings: list[dict]
     relevance_score: float
+    relevance: dict
+    portfolio_snapshot: dict
+    client_profile_summary: dict
     job_key: str
     log_file_path: str
     insight_draft: str

@@ -13,7 +13,14 @@ from app.common.azure_services.cosmos import (
 )
 from app.common.mongo_backup import backup_document_sync
 from app.common.news_monitor import merge_news_monitoring, update_news_lifecycle
+
 from ..config import process_news_stream, settings
+from ..relevance import (
+    build_client_profile_summary,
+    build_compact_portfolio_context_from_grounding,
+    build_relevance_payload,
+    ground_candidate_against_holdings,
+)
 from ..util import EventExecutor
 
 
@@ -33,6 +40,7 @@ class StandardState(TypedDict):
     news_batch: list[dict]
     relevance_results: dict[str, list[dict]]
     relevance_map: list[dict]
+    grounded_relevance_map: list[dict]
     generate_insight_events: list[dict]
 
 
@@ -150,13 +158,7 @@ def map_relevance(state: StandardState) -> StandardState:
                     "client_name": client.get("client_name"),
                     "news_id": news_id,
                     "news_document": news_doc,
-                    "client_portfolio_document": client.get(
-                        "client_portfolio_document",
-                        {},
-                    ),
-                    "score": client["relevance_score"],
-                    "matched_isins": client.get("matched_isins", []),
-                    "matched_tags": client.get("matched_tags", []),
+                    "candidate": client,
                 }
             )
 
@@ -166,22 +168,64 @@ def map_relevance(state: StandardState) -> StandardState:
     return state
 
 
+def ground_relevance(state: StandardState) -> StandardState:
+    grounded_map = []
+    for pair in state["relevance_map"]:
+        grounding = ground_candidate_against_holdings(
+            news_doc=pair["news_document"],
+            candidate=pair["candidate"],
+        )
+        grounded_relevance = grounding.get("holding_match_summary", {}).get(
+            "client_grounded_relevance",
+            "none",
+        )
+        if grounded_relevance == "none":
+            continue
+        grounded_map.append({**pair, "grounding": grounding})
+
+    state["grounded_relevance_map"] = grounded_map
+    print(f"[Standard] Grounded map: {len(grounded_map)} retail client/news pairs")
+    return state
+
+
 def create_insight_events(state: StandardState) -> StandardState:
     events = []
-    for pair in state["relevance_map"]:
+    for pair in state["grounded_relevance_map"]:
         news_doc = pair["news_document"]
+        candidate = pair["candidate"]
+        profile = candidate.get("search_relevance_profile", {}) or {}
+        grounding = pair.get("grounding", {}) or {}
+        relevance = build_relevance_payload(candidate, grounding)
+        compact_context = build_compact_portfolio_context_from_grounding(
+            news_doc=news_doc,
+            profile=profile,
+            grounding=grounding,
+        )
+        overflow = grounding.get("overflow", {}) if isinstance(grounding, dict) else {}
+        included = int(overflow.get("matched_holding_count_included", 0) or 0)
+        total = int(overflow.get("matched_holding_count_total", 0) or 0)
         events.append(
             {
+                "event_type": "generate_insight",
+                "schema_version": "v1.2",
                 "client_id": pair["client_id"],
                 "client_name": pair["client_name"] or pair["client_id"],
                 "news_doc_id": news_doc["id"],
                 "partition_key": news_doc["id"],
                 "news_title": news_doc.get("title"),
                 "news_document": news_doc,
-                "client_portfolio_document": pair["client_portfolio_document"],
-                "relevance_score": pair["score"],
-                "matched_isins": pair["matched_isins"],
-                "matched_tags": pair["matched_tags"],
+                "portfolio_snapshot": grounding.get("portfolio_snapshot", {}),
+                "client_profile_summary": build_client_profile_summary(profile),
+                "relevance": relevance,
+                "matched_holdings": grounding.get("matched_holdings", []),
+                "overflow": {
+                    "omitted_matched_holdings": max(total - included, 0),
+                },
+                "client_portfolio_document": compact_context,
+                "compact_portfolio_context": compact_context,
+                "matched_tickers": candidate.get("matched_tickers", []),
+                "matched_tags": candidate.get("matched_tags", []),
+                "relevance_score": relevance["candidate_score"],
                 "priority": "scheduled",
                 "source": "mas.standard_workflow",
             }
@@ -238,6 +282,7 @@ def build_standard_graph() -> StateGraph:
     g.add_node("activate", standard_agent_activation)
     g.add_node("fetch_news", fetch_news_batch)
     g.add_node("map_relevance", map_relevance)
+    g.add_node("ground_relevance", ground_relevance)
     g.add_node("create_events", create_insight_events)
 
     g.set_entry_point("activate")
@@ -247,6 +292,7 @@ def build_standard_graph() -> StateGraph:
         has_news_batch,
         {"map_relevance": "map_relevance", END: END},
     )
-    g.add_edge("map_relevance", "create_events")
+    g.add_edge("map_relevance", "ground_relevance")
+    g.add_edge("ground_relevance", "create_events")
     g.add_edge("create_events", END)
     return g.compile()
