@@ -1,3 +1,7 @@
+export interface HealthResponse {
+  status: string;
+}
+
 export interface ClientListItem {
   client_id: string;
   client_name: string;
@@ -103,10 +107,4 @@ export interface OpsInsightItem {
 export interface OpsInsightListResponse {
   count: number;
   items: OpsInsightItem[];
-}
-
-export interface PipelineRunResult {
-  documents_processed: number;
-  pipeline_status: string;
-  sample_folder?: string;
 }

@@ -14,6 +14,7 @@ interface DataTableProps<T> {
   emptyMessage: string;
   ariaLabel?: string;
   getRowKey?: (row: T, index: number) => string;
+  maxHeightClassName?: string;
 }
 
 export function DataTable<T>(props: DataTableProps<T>) {
@@ -27,7 +28,12 @@ export function DataTable<T>(props: DataTableProps<T>) {
 
   return (
     <div className="overflow-hidden rounded-2xl border border-[var(--border-1)] bg-[rgba(255,255,255,0.03)]">
-      <div className="overflow-x-auto">
+      <div
+        className={[
+          "overflow-auto",
+          props.maxHeightClassName ?? "",
+        ].join(" ").trim()}
+      >
         <table className="w-full border-collapse" aria-label={props.ariaLabel ?? "Data table"}>
           <thead className="bg-[rgba(115,166,255,0.08)]">
             <tr>

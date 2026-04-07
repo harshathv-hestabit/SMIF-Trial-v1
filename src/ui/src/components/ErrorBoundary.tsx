@@ -1,4 +1,3 @@
-import { Button } from "@heroui/react";
 import type { ReactNode } from "react";
 import { Component } from "react";
 
@@ -35,19 +34,23 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
   render() {
     if (this.state.hasError) {
       return (
-        <div className="grid min-h-screen place-items-center bg-[radial-gradient(circle_at_top,_#dff6ea,_#f6f2e9_45%,_#f2ede2_100%)] p-6 text-slate-950">
-          <div className="grid max-w-xl gap-4 rounded-[2rem] border border-rose-200 bg-white p-8 shadow-[0_20px_80px_rgba(15,23,42,0.08)]">
+        <div className="grid min-h-screen place-items-center bg-[var(--canvas)] p-6 text-[var(--ink-strong)]">
+          <div className="grid max-w-xl gap-4 rounded-[2rem] border border-[var(--line)] bg-[var(--panel-strong)] p-8 shadow-[0_20px_80px_rgba(15,23,42,0.08)]">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-rose-700">
+              <p className="text-xs font-semibold uppercase tracking-[0.25em] text-[var(--critical)]">
                 UI Error
               </p>
               <h1 className="mt-2 text-2xl font-semibold">The page hit a render failure.</h1>
             </div>
-            <p className="text-sm text-slate-600">{this.state.message}</p>
+            <p className="text-sm text-[var(--ink-soft)]">{this.state.message}</p>
             <div>
-              <Button variant="primary" onPress={this.handleReload}>
+              <button
+                type="button"
+                onClick={this.handleReload}
+                className="rounded-full bg-[var(--accent)] px-4 py-2 text-sm font-medium text-white transition hover:bg-[var(--accent-strong)]"
+              >
                 Reload Page
-              </Button>
+              </button>
             </div>
           </div>
         </div>

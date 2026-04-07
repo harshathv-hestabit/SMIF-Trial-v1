@@ -2,11 +2,11 @@ import type {
   ClientInsightListResponse,
   ClientListResponse,
   ClientPortfolio,
+  HealthResponse,
   OpsInsightListResponse,
   OpsMetrics,
   OpsNewsDetail,
   OpsNewsListResponse,
-  PipelineRunResult,
 } from "./types";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -19,7 +19,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => request<{ status: string }>("/api/health"),
+  health: () => request<HealthResponse>("/api/health"),
   listClients: () => request<ClientListResponse>("/api/clients"),
   getClientPortfolio: (clientId: string) =>
     request<ClientPortfolio>(`/api/clients/${clientId}/portfolio`),
@@ -32,14 +32,4 @@ export const api = {
     request<OpsNewsDetail>(`/api/ops/news/${newsId}`),
   getOpsInsights: (limit = 10) =>
     request<OpsInsightListResponse>(`/api/ops/insights?limit=${limit}`),
-  uploadPipelineFiles: (files: File[]) => {
-    const formData = new FormData();
-    files.forEach((file) => {
-      formData.append("files", file);
-    });
-    return request<PipelineRunResult>("/api/ops/pipeline/upload", {
-      method: "POST",
-      body: formData,
-    });
-  },
 };
