@@ -500,3 +500,356 @@ The compaction layer is still working, but it is now clearly a secondary optimiz
 - Introduce reusable per-news analysis objects so repeated news does not restart reasoning from scratch for each client.
 - Add a zero-overlap fast path with deterministic phrasing and stricter routing before iterative LLM generation starts.
 - Strengthen preprocessing for security type and mandate constraints so the generator is not asked to infer these late in the loop.
+
+## Latest Daily Audit: 2026-04-03 (New Relevance System / Client Processing)
+
+- Audit scope: `src/app/modules/MAS/logs/generate_insight/20260403*.log`
+- Local audit date: `2026-04-03`
+- Runs audited: `47`
+
+### Executive Summary
+
+- Total runs: `47`
+- Verified: `21`
+- Failed: `26`
+- Total prompt tokens: `108,850`
+- Total completion tokens: `73,267`
+- Total tokens: `182,117`
+- Total iterations: `107`
+- Total LLM calls: `174`
+
+The new relevance system is visible in prompts via `Grounded Relevance: direct|indirect`, but today’s logs do not show evidence of a major token-efficiency breakthrough yet. The system still spent `182,117` tokens in one day, all of it on repeated-news documents, and indirect-relevance cases remain highly failure-prone.
+
+### Highest-Impact Findings
+
+- Repeated news processing still accounts for all spend today: `182,117 / 182,117` tokens were on multi-client repeated news docs.
+- `Grounded Relevance` now appears in prompts: `direct` had `33` runs, `20` verified, `13` failed, and `117,323` tokens; `indirect` had `14` runs, `1` verified, `13` failed, and `64,794` tokens.
+- Indirect relevance is still a poor spend bucket: only `1` of `14` indirect runs verified.
+- Most common precheck failures were `missing_no_direct_exposure_statement` (`20`), `too_long` (`17`), `empty_draft` (`2`), and `missing_direct_symbol_reference` (`1`).
+- Verifier cost remains material: `insight_generator` used `103,718` tokens across `107` calls; `verifier` used `78,399` tokens across `67` calls.
+
+### New Telemetry Gap
+
+- All `47` runs logged an empty `agent_context_profile.profile`.
+- Because of that, the old `news_symbol_overlap` / compact-profile telemetry is effectively absent from today’s logs.
+- The historical overlap audit is therefore no longer comparable on `2026-04-03`; the meaningful routing signal today is `Grounded Relevance`, not `compact_counts.news_symbol_overlap`.
+
+This is an auditability regression. The new relevance architecture may be better, but the logs no longer expose enough structured context to prove why a run was classified as direct vs indirect or how much compaction/filtering was achieved.
+
+### News Documents With Highest Total Token Spend Today
+
+| News Doc ID | Runs | Verified | Failed | Client IDs | Total Tokens |
+|---|---:|---:|---:|---|---:|
+| `51643306` | 5 | 1 | 4 | `311`, `3621`, `6269`, `8255`, `8917` | 24003 |
+| `51632723` | 5 | 2 | 3 | `311`, `3621`, `8255`, `8917`, `9579` | 19328 |
+| `51633652` | 3 | 1 | 2 | `311`, `3621`, `8917` | 13274 |
+| `51633458` | 2 | 0 | 2 | `311`, `3621` | 12195 |
+| `51636374` | 3 | 0 | 3 | `311`, `3621`, `642` | 11211 |
+| `51633653` | 2 | 0 | 2 | `311`, `8917` | 10843 |
+| `51633899` | 2 | 1 | 1 | `311`, `6269` | 10710 |
+| `51637298` | 2 | 1 | 1 | `311`, `6269` | 9175 |
+| `51644008` | 2 | 1 | 1 | `311`, `3621` | 8648 |
+| `51635025` | 2 | 0 | 2 | `311`, `8917` | 8486 |
+| `51636047` | 2 | 2 | 0 | `311`, `3621` | 7547 |
+| `51639363` | 3 | 2 | 1 | `311`, `8255`, `8917` | 7529 |
+
+### Most Expensive Individual Runs Today
+
+| Log File | News Doc ID | Client ID | Status | Iterations | LLM Calls | Total Tokens |
+|---|---|---|---|---:|---:|---:|
+| `20260403T100050132725Z_6269_51633899.log` | `51633899` | `6269` | `failed` | 3 | 6 | 7128 |
+| `20260403T100154515853Z_8255_51643306.log` | `51643306` | `8255` | `failed` | 3 | 5 | 7035 |
+| `20260403T100040144504Z_6269_51637298.log` | `51637298` | `6269` | `failed` | 3 | 5 | 6729 |
+| `20260403T100039195479Z_3621_51633458.log` | `51633458` | `3621` | `failed` | 3 | 6 | 6195 |
+| `20260403T100044147927Z_311_51633458.log` | `51633458` | `311` | `failed` | 3 | 6 | 6000 |
+| `20260403T100046418329Z_8917_51633653.log` | `51633653` | `8917` | `failed` | 3 | 5 | 5822 |
+| `20260403T100224301375Z_9579_51632723.log` | `51632723` | `9579` | `failed` | 3 | 4 | 5680 |
+| `20260403T100535613897Z_8917_51633652.log` | `51633652` | `8917` | `failed` | 3 | 5 | 5677 |
+| `20260403T100039651601Z_3621_51644008.log` | `51644008` | `3621` | `failed` | 3 | 6 | 5363 |
+| `20260403T100400437916Z_3621_51636047.log` | `51636047` | `3621` | `verified` | 3 | 5 | 5143 |
+| `20260403T100139232489Z_311_51632723.log` | `51632723` | `311` | `failed` | 3 | 5 | 5090 |
+| `20260403T100039266801Z_311_51633653.log` | `51633653` | `311` | `failed` | 3 | 5 | 5021 |
+
+### Client Totals Today
+
+| Client ID | Runs | Verified | Failed | Total Tokens |
+|---|---:|---:|---:|---:|
+| `311` | 19 | 11 | 8 | 66201 |
+| `3621` | 11 | 5 | 6 | 39531 |
+| `8917` | 9 | 3 | 6 | 35097 |
+| `6269` | 3 | 1 | 2 | 17777 |
+| `8255` | 3 | 1 | 2 | 13757 |
+| `9579` | 1 | 0 | 1 | 5680 |
+| `642` | 1 | 0 | 1 | 4074 |
+
+### Grounded Relevance Breakdown
+
+| Grounded Relevance | Runs | Verified | Failed | Total Tokens |
+|---|---:|---:|---:|---:|
+| `direct` | 33 | 20 | 13 | 117323 |
+| `indirect` | 14 | 1 | 13 | 64794 |
+
+This is the most useful new quality signal in today’s logs. The current indirect path is still too expensive relative to its success rate.
+
+### Revision Compaction Status
+
+- Verifier compaction events observed: `67`
+- Full feedback chars total: `42,132`
+- Compact payload chars total: `27,226`
+- Estimated revision-guidance compaction savings: `35.38%`
+- Compaction occurred in `64` of `67` verifier completions
+
+The revision-guidance optimization is still working. It is not the bottleneck.
+
+### Representative Findings From Sample Logs
+
+- New prompts include `Grounded Relevance`, for example an indirect Nike downgrade case: [20260403T100039090274Z_311_51633960.log](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/MAS/logs/generate_insight/20260403T100039090274Z_311_51633960.log)
+- The same run still failed after three iterations because the system could not produce a convincing portfolio-specific indirect insight.
+- Another indirect tech-whale-activity case burned `5,677` tokens and still failed after three iterations: [20260403T100535613897Z_8917_51633652.log](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/MAS/logs/generate_insight/20260403T100535613897Z_8917_51633652.log)
+
+### Architectural Read For The New System
+
+- The new relevance architecture is surfacing a useful direct/indirect label.
+- It does not yet show a token-efficiency win at the workflow level.
+- The strongest signal today is negative: indirect runs are still entering expensive iterative generation and mostly failing.
+- The loss of compact-profile telemetry makes it harder to validate whether the new client-processing architecture is actually filtering context better than the previous one.
+
+### Recommended Next Focus
+
+- Add explicit log fields for the new relevance pipeline output: matched holdings count, relevance reason, filtered holdings count, dropped holdings count, and compaction/selection char estimates.
+- Route `indirect` relevance through a cheaper template or capped single-pass path instead of full iterative generation by default.
+- Restore structured portfolio-compaction telemetry so token savings remain measurable after the architecture change.
+
+## Latest Daily Audit Update: 2026-04-03 (Expanded Log Set)
+
+- Audit scope: `src/app/modules/MAS/logs/generate_insight/20260403*.log`
+- Snapshot type: full-day recompute after additional logs arrived
+- Runs audited: `174`
+
+### Executive Summary
+
+- Total runs: `174`
+- Verified: `90`
+- Failed: `84`
+- Total prompt tokens: `383,711`
+- Total completion tokens: `253,850`
+- Total tokens: `637,561`
+- Total iterations: `386`
+- Total LLM calls: `640`
+
+Compared with the earlier `47`-run snapshot for `2026-04-03`, the newer logs strengthen the same conclusion: the new relevance architecture exposes a useful `direct`/`indirect` label, but it has not yet produced a workflow-level token-efficiency win.
+
+### Highest-Impact Findings
+
+- Repeated news processing still accounts for all spend today: `637,561 / 637,561` tokens were spent on repeated multi-client news documents.
+- `Grounded Relevance` remains the most useful routing signal: `direct` had `104` runs, `78` verified, `26` failed, and `338,718` tokens; `indirect` had `70` runs, `12` verified, `58` failed, and `298,843` tokens.
+- Indirect runs are still very low yield: only `12` of `70` verified while consuming nearly half of all tokens.
+- Most common precheck failures were `missing_no_direct_exposure_statement` (`89`), `too_long` (`39`), `empty_draft` (`3`), and `missing_direct_symbol_reference` (`1`).
+- Verifier cost remains material: `insight_generator` used `346,270` tokens across `386` calls; `verifier` used `291,291` tokens across `254` calls.
+
+### Telemetry Status
+
+- All `174` runs still logged an empty `agent_context_profile.profile`.
+- The old compact-profile and overlap telemetry remains absent.
+- This means the new system is currently less auditable than the earlier compaction-based pipeline, even if the underlying relevance classification may be better.
+
+### News Documents With Highest Total Token Spend In The Expanded Snapshot
+
+| News Doc ID | Runs | Verified | Failed | Client IDs | Total Tokens |
+|---|---:|---:|---:|---|---:|
+| `51632723` | 20 | 4 | 16 | `10572`, `10903`, `11234`, `1304`, `2959`, `311`, `3621`, `4283`, `4614`, `5938`, `6931`, `8255`, `8917`, `9579`, `9910` | 93872 |
+| `51643306` | 15 | 7 | 8 | `10572`, `10903`, `1304`, `2959`, `311`, `3621`, `4283`, `4614`, `5938`, `6269`, `6931`, `8255`, `8917`, `9910` | 70505 |
+| `51633658` | 13 | 5 | 8 | `10572`, `10903`, `11234`, `1304`, `311`, `5938`, `6269`, `6931`, `7262`, `8917`, `9910` | 52360 |
+| `51633653` | 12 | 1 | 11 | `10572`, `10903`, `11234`, `1304`, `311`, `5938`, `6931`, `7262`, `8917`, `9910` | 44817 |
+| `51636374` | 11 | 2 | 9 | `10572`, `10903`, `11234`, `1304`, `311`, `3621`, `5938`, `6269`, `642`, `6931`, `9910` | 35394 |
+| `51633652` | 10 | 6 | 4 | `10903`, `311`, `3621`, `5938`, `6269`, `6931`, `7262`, `8917` | 33442 |
+| `51633458` | 8 | 3 | 5 | `10903`, `311`, `3621`, `5938`, `6269`, `6931` | 32492 |
+| `51643875` | 8 | 7 | 1 | `311`, `5938`, `6269`, `6931`, `8917`, `9910` | 27682 |
+| `51644008` | 8 | 7 | 1 | `10903`, `311`, `3621`, `5938`, `6269`, `6931` | 26703 |
+| `51637298` | 6 | 3 | 3 | `11234`, `311`, `6269`, `9910` | 25166 |
+| `51633914` | 8 | 7 | 1 | `10903`, `311`, `3621`, `5938`, `6269`, `6931` | 25015 |
+| `51639363` | 7 | 4 | 3 | `311`, `6931`, `8255`, `8917` | 24919 |
+| `51633899` | 5 | 4 | 1 | `311`, `6269`, `9910` | 24112 |
+| `51636047` | 8 | 8 | 0 | `10903`, `311`, `3621`, `5938`, `6269`, `6931` | 21862 |
+| `51635025` | 6 | 1 | 5 | `11234`, `311`, `6931`, `8917` | 21756 |
+
+### Most Expensive Individual Runs In The Expanded Snapshot
+
+| Log File | News Doc ID | Client ID | Status | Iterations | LLM Calls | Total Tokens |
+|---|---|---|---|---:|---:|---:|
+| `20260403T105517790685Z_6269_51633658.log` | `51633658` | `6269` | `verified` | 3 | 6 | 8082 |
+| `20260403T100050132725Z_6269_51633899.log` | `51633899` | `6269` | `failed` | 3 | 6 | 7128 |
+| `20260403T110605426962Z_5938_51632723.log` | `51632723` | `5938` | `failed` | 3 | 5 | 7128 |
+| `20260403T105527408926Z_311_51637298.log` | `51637298` | `311` | `failed` | 3 | 6 | 7078 |
+| `20260403T100154515853Z_8255_51643306.log` | `51643306` | `8255` | `failed` | 3 | 5 | 7035 |
+| `20260403T105634627749Z_311_51632723.log` | `51632723` | `311` | `failed` | 3 | 6 | 6832 |
+| `20260403T100040144504Z_6269_51637298.log` | `51637298` | `6269` | `failed` | 3 | 5 | 6729 |
+| `20260403T105536417210Z_8917_51633658.log` | `51633658` | `8917` | `failed` | 3 | 5 | 6386 |
+| `20260403T110648647978Z_4614_51632723.log` | `51632723` | `4614` | `failed` | 3 | 5 | 6357 |
+| `20260403T110433452651Z_10903_51633652.log` | `51633652` | `10903` | `failed` | 3 | 5 | 6255 |
+| `20260403T100039195479Z_3621_51633458.log` | `51633458` | `3621` | `failed` | 3 | 6 | 6195 |
+| `20260403T105711003376Z_6269_51633899.log` | `51633899` | `6269` | `verified` | 2 | 4 | 6055 |
+| `20260403T100044147927Z_311_51633458.log` | `51633458` | `311` | `failed` | 3 | 6 | 6000 |
+| `20260403T110634868149Z_4283_51632723.log` | `51632723` | `4283` | `failed` | 3 | 6 | 5954 |
+| `20260403T100046418329Z_8917_51633653.log` | `51633653` | `8917` | `failed` | 3 | 5 | 5822 |
+
+### Client Totals In The Expanded Snapshot
+
+| Client ID | Runs | Verified | Failed | Total Tokens |
+|---|---:|---:|---:|---:|
+| `311` | 36 | 22 | 14 | 132604 |
+| `6931` | 17 | 7 | 10 | 64677 |
+| `3621` | 20 | 11 | 9 | 64186 |
+| `8917` | 16 | 6 | 10 | 63354 |
+| `6269` | 17 | 15 | 2 | 59083 |
+| `5938` | 14 | 8 | 6 | 47031 |
+| `10903` | 13 | 6 | 7 | 43063 |
+| `9910` | 8 | 5 | 3 | 28186 |
+| `8255` | 5 | 2 | 3 | 25052 |
+| `1304` | 5 | 1 | 4 | 21972 |
+
+### Grounded Relevance Breakdown
+
+| Grounded Relevance | Runs | Verified | Failed | Total Tokens |
+|---|---:|---:|---:|---:|
+| `direct` | 104 | 78 | 26 | 338718 |
+| `indirect` | 70 | 12 | 58 | 298843 |
+
+The updated full-day snapshot makes the indirect problem clearer: `40.23%` of runs are indirect, but they account for `46.87%` of all tokens and have an `82.86%` failure rate.
+
+### Revision Compaction Status
+
+- Verifier compaction events observed: `254`
+- Full feedback chars total: `163,355`
+- Compact payload chars total: `103,719`
+- Estimated revision-guidance compaction savings: `36.51%`
+- Compaction occurred in `241` of `254` verifier completions
+
+The revision-guidance optimization still holds up. The main problem remains routing and iteration cost, not feedback replay.
+
+### Updated Architectural Read
+
+- The new relevance architecture still looks directionally correct in one respect: `direct` runs verify much more often than `indirect` runs.
+- The token-efficiency outcome is still weak because the system continues to send many indirect cases into expensive iterative generation.
+- The auditability regression remains unresolved: every `agent_context_profile.profile` is empty, so the new client-processing architecture cannot currently be validated through logs the way the previous compaction pipeline could.
+
+### Updated Next Focus
+
+- Add an `indirect` fast path with a hard cap of one generation pass and no verifier loop unless a stronger escalation condition is met.
+- Restore structured telemetry for the new client-processing output so logs show why holdings were selected, how many were dropped, and what compaction or selection savings were achieved.
+- Add a daily dashboard metric for `indirect verified %`, `indirect tokens / total tokens`, and `tokens per news doc` so the new relevance system can be measured as an optimization, not just observed qualitatively.
+
+## Latest Daily Audit: 2026-04-06
+
+- Audit scope: `src/app/modules/MAS/logs/generate_insight/20260406*.log`
+- Local audit date: `2026-04-06`
+- Runs audited: `49`
+
+### Executive Summary
+
+- Total runs: `49`
+- Verified: `39`
+- Failed: `10`
+- Total prompt tokens: `97,860`
+- Total completion tokens: `61,654`
+- Total tokens: `159,514`
+- Total iterations: `79`
+- Total LLM calls: `153`
+
+This is the first recent log set that shows a real workflow improvement. Verification rate is much higher than the `2026-04-03` runs, route-level telemetry is richer, and precheck churn is much lower. The remaining issues are narrower: all runs still go through `full_loop`, verifier cost still exceeds generator cost, and `agent_context_profile.profile` is still empty.
+
+### Highest-Impact Findings
+
+- Verification rate improved to `39 / 49` (`79.59%`), with only `10` failures.
+- Route telemetry is now present on every run: execution route is `full_loop` on all `49` runs, grounded relevance is `direct` on all `49` runs, and security type alignment is `True` on all `49` runs.
+- Repeated news still dominates spend, but not absolutely: repeated-news tokens were `136,495` and single-news tokens were `23,019`.
+- Average matched holdings per routed run: `11.2`
+- Max matched holdings in a single run: `68`
+- Matched symbols were non-empty in `45` runs and empty in `4` runs.
+- Most common precheck failures were only `missing_no_direct_exposure_statement` (`4`) and `missing_direct_symbol_reference` (`1`).
+- Verifier cost remains material: `insight_generator` used `71,762` tokens across `79` calls; `verifier` used `87,752` tokens across `74` calls.
+
+### Important Route-Level Read
+
+- The new routing system appears to be filtering out indirect/weak cases before they reach this workflow.
+- That is likely the main reason the `2026-04-06` success rate is materially better than the `2026-04-03` runs.
+- However, every routed case still goes to `full_loop`, so the architecture has not yet started converting routing confidence into cheaper execution modes.
+
+### Telemetry Status
+
+- Route-level logging is much better than on `2026-04-03`.
+- `workflow_route_received` now records `execution_route`, `route_reason`, `grounded_relevance`, `matched_holdings_count`, `matched_symbols`, and `security_type_alignment`.
+- But `agent_context_profile.profile` is still empty on all `49` runs, so compact-profile / filtering / compaction auditability is still missing.
+
+### News Documents With Highest Total Token Spend Today
+
+| News Doc ID | Runs | Verified | Failed | Client IDs | Total Tokens |
+|---|---:|---:|---:|---|---:|
+| `51649729` | 8 | 7 | 1 | `10903`, `311`, `3621`, `5938`, `6269`, `6931`, `8255`, `9910` | 22201 |
+| `51650557` | 5 | 3 | 2 | `311`, `5938`, `6269`, `8917`, `9910` | 22043 |
+| `51650423` | 5 | 4 | 1 | `10903`, `311`, `3621`, `5938`, `6269` | 16843 |
+| `51644008` | 5 | 4 | 1 | `10903`, `311`, `3621`, `6269`, `6931` | 14423 |
+| `51644811` | 2 | 1 | 1 | `311`, `6269` | 13132 |
+| `51643875` | 3 | 2 | 1 | `311`, `6269`, `8917` | 11609 |
+| `51637298` | 2 | 2 | 0 | `311`, `6269` | 9119 |
+| `51644048` | 5 | 5 | 0 | `10903`, `311`, `3621`, `6269`, `6931` | 8545 |
+| `51639363` | 2 | 1 | 1 | `8255`, `8917` | 7369 |
+| `51651901` | 3 | 3 | 0 | `311`, `6269`, `9910` | 6233 |
+
+### Most Expensive Individual Runs Today
+
+| Log File | News Doc ID | Client ID | Status | Iterations | LLM Calls | Total Tokens |
+|---|---|---|---|---:|---:|---:|
+| `20260406T074746710786Z_311_51649729.log` | `51649729` | `311` | `failed` | 3 | 6 | 6791 |
+| `20260406T074931716218Z_6269_51644811.log` | `51644811` | `6269` | `failed` | 3 | 6 | 6638 |
+| `20260406T074845456199Z_311_51637298.log` | `51637298` | `311` | `verified` | 3 | 6 | 6623 |
+| `20260406T074956876252Z_311_51644811.log` | `51644811` | `311` | `verified` | 3 | 6 | 6494 |
+| `20260406T075009523071Z_311_51643875.log` | `51643875` | `311` | `failed` | 3 | 6 | 6385 |
+| `20260406T075035841659Z_9910_51650557.log` | `51650557` | `9910` | `failed` | 3 | 6 | 6380 |
+| `20260406T074749337519Z_3621_51650423.log` | `51650423` | `3621` | `failed` | 3 | 6 | 6064 |
+| `20260406T074812639343Z_311_51644008.log` | `51644008` | `311` | `failed` | 3 | 6 | 6052 |
+| `20260406T074937788044Z_8917_51639363.log` | `51639363` | `8917` | `failed` | 3 | 6 | 6045 |
+| `20260406T074744596872Z_311_51650557.log` | `51650557` | `311` | `failed` | 3 | 5 | 5813 |
+
+### Client Totals Today
+
+| Client ID | Runs | Verified | Failed | Total Tokens |
+|---|---:|---:|---:|---:|
+| `311` | 10 | 6 | 4 | 49948 |
+| `6269` | 12 | 11 | 1 | 36966 |
+| `8917` | 5 | 3 | 2 | 21113 |
+| `3621` | 6 | 4 | 2 | 16978 |
+| `9910` | 3 | 2 | 1 | 9017 |
+| `10903` | 4 | 4 | 0 | 9001 |
+| `5938` | 4 | 4 | 0 | 8887 |
+| `6931` | 3 | 3 | 0 | 4743 |
+| `8255` | 2 | 2 | 0 | 2861 |
+
+### Revision Compaction Status
+
+- Verifier compaction events observed: `74`
+- Full feedback chars total: `42,780`
+- Compact payload chars total: `28,843`
+- Estimated revision-guidance compaction savings: `32.58%`
+- Compaction occurred in `68` of `74` verifier completions
+
+The feedback-compaction layer is still working, but it is no longer the main story in this log set.
+
+### Representative Findings From Sample Logs
+
+- Route instrumentation is now much richer, for example: [20260406T074744596872Z_311_51650557.log](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/MAS/logs/generate_insight/20260406T074744596872Z_311_51650557.log)
+- That sample also shows a remaining failure pattern: good direct grounding, but iterative outputs still drift into discretionary trade language that breaches `execution-only` constraints.
+- Another notable edge case is a run classified as `direct` with `matched_holdings_count = 9` but `matched_symbols = []`: [20260406T075317164126Z_2959_51644811.log](/home/harshathvenkastesh/Desktop/SMIF/src/app/modules/MAS/logs/generate_insight/20260406T075317164126Z_2959_51644811.log)
+
+### Architectural Read
+
+- The new routing layer appears to be working better than the `2026-04-03` version because weak indirect cases are no longer dominating the day.
+- The next optimization opportunity is execution-mode reduction, not just better routing labels.
+- Right now, all `49` runs still take `full_loop`, so the system is still paying verifier and multi-iteration costs even after a direct/high-confidence route decision.
+- The missing `agent_context_profile.profile` payload is still an observability gap.
+
+### Recommended Next Focus
+
+- Add a cheaper execution path for high-confidence `direct` routes, for example a single-pass generator followed by save if deterministic checks pass.
+- Enforce execution-only constraints earlier so trade-suggestion language is blocked before verifier cycles are spent correcting it.
+- Keep the new route telemetry, but restore compact-profile and filtering telemetry so relevance quality and token savings can both be audited.

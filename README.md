@@ -2,19 +2,35 @@
 
 SMIF is an event-driven market insight system for ingesting news, enriching and storing it, matching it against client portfolios, and generating client-facing insights.
 
+## Documentation Hub
+
+Detailed runtime, service, workflow, and contract docs now live under [docs/README.md](/home/harshathvenkastesh/Desktop/SMIF/docs/README.md).
+
+Recommended starting points:
+
+- [docs/docker-runtime/README.md](/home/harshathvenkastesh/Desktop/SMIF/docs/docker-runtime/README.md)
+- [docs/storage-and-contracts/README.md](/home/harshathvenkastesh/Desktop/SMIF/docs/storage-and-contracts/README.md)
+- [docs/workflows/news-to-insight/README.md](/home/harshathvenkastesh/Desktop/SMIF/docs/workflows/news-to-insight/README.md)
+- [docs/workflows/portfolio-and-relevance/README.md](/home/harshathvenkastesh/Desktop/SMIF/docs/workflows/portfolio-and-relevance/README.md)
+
 ## Current Project Status
 
-The repository is in a transition phase:
+The repository is in an active v1.2 state:
 
 - The core pipeline is active: news ingestion, normalization, storage, queue dispatch, client portfolio processing, and MAS workflows.
-- A new React UI and `UI_API` backend have been added for the operator dashboard and client views.
-- The older Streamlit apps still exist and still run in Docker while the React UI reaches parity.
+- The supported UI stack is the React frontend in `src/ui` backed by the FastAPI `UI_API` service.
+- The deprecated Streamlit interfaces have been removed from the default runtime and are no longer part of local Docker Compose.
+- MAS relevance admission is currently tuned for lower false-positive volume before `generate_insight` runs:
+  - Standard workflow threshold: `0.75`
+  - Standard final candidate cap: `10`
+  - HNW workflow threshold: `0.85`
+  - HNW final candidate cap: `5`
 
 In practice, the repo currently supports both:
 
 - React frontend at `src/ui`
 - FastAPI UI backend at `src/app/modules/UI_API`
-- Legacy Streamlit surfaces in `DPS` and `FEED`
+- Event-driven backend services in `NEWS_PROVIDER`, `DPS`, `MAS`, and Azure Functions
 
 ## Runtime Architecture
 
@@ -24,6 +40,7 @@ flowchart LR
     EH[(Event Hub)]
     DPSN[DPS news_processor]
     CDB[(Cosmos DB)]
+    MDB[(Mongo Backup / UI Read Store)]
     FUNC[Azure Functions]
     SB[(Service Bus)]
     DPSC[DPS client_processor]
@@ -31,21 +48,21 @@ flowchart LR
     MAS[MAS workflows]
     UIAPI[UI_API]
     UI[React UI]
-    FEED[FEED Streamlit]
-    DPSUI[DPS Streamlit]
 
     NP --> EH
     EH --> DPSN
     DPSN --> CDB
+    DPSN --> MDB
     CDB --> FUNC
     FUNC --> SB
     DPSC --> CDB
+    DPSC --> MDB
     DPSC --> ES
     SB --> MAS
-    CDB --> UIAPI
+    MAS --> CDB
+    MAS --> MDB
+    MDB --> UIAPI
     UI --> UIAPI
-    CDB --> FEED
-    CDB --> DPSUI
     ES --> MAS
 ```
 
@@ -57,11 +74,9 @@ flowchart LR
 - `dps_news_processor`: consumes Event Hub events, transforms them, and stores normalized news in Cosmos DB.
 - `functions`: Azure Functions host for Cosmos DB change-feed dispatch and scheduled standard jobs.
 - `mas`: consumes Service Bus queues and runs the `hnw`, `standard`, and `generate_insight` workflows.
-- `dps_client_processor`: ingests client portfolio CSV data, writes portfolio documents to Cosmos DB, and updates Elasticsearch.
-- `ui-api`: FastAPI backend for React-based ops and client views.
+- `dps_client_processor`: ingests client portfolio CSV data, writes portfolio documents to Cosmos DB, mirrors them to Mongo when enabled, and updates Elasticsearch.
+- `ui-api`: FastAPI backend for React-based ops and client views; the current implementation reads Mongo-backed collections.
 - `ui`: Vite/React frontend served through nginx and proxied to `ui-api`.
-- `dps`: legacy Streamlit operations dashboard.
-- `insight_feed_service`: legacy Streamlit client insight browser.
 
 ### Local infrastructure
 
@@ -83,7 +98,7 @@ flowchart LR
    - `delayed-news-events`
    - `generate-insight-events`
 6. `dps_client_processor` builds client portfolio documents and search data.
-7. `ui-api`, `dps`, and `insight_feed_service` read from Cosmos DB to expose ops and client views.
+7. `ui-api` reads Mongo-backed collections to expose ops and client views to the React frontend.
 
 ## Repository Layout
 
@@ -97,15 +112,27 @@ src/
     functions/
     modules/
       DPS/
-      FEED/
       MAS/
       NEWS_PROVIDER/
       UI_API/
 docs/
+  README.md
+  docker-runtime/
+  docker-services/
+  workflows/
+  storage-and-contracts/
+  token-analysis.md
   react-ui-migration.md
   smif-current-phase.drawio
+SMIF-v1.2-REVISIONS.md
 README.md
 ```
+
+## Current MAS Relevance Defaults
+
+- Standard workflow uses `min_score=0.75` and `final_top_n=10`.
+- HNW workflow uses `min_score=0.85` and `final_top_n=5`.
+- These values are wired through `src/app/modules/MAS/workflow/standard.py`, `src/app/modules/MAS/workflow/hnw.py`, and `src/app/modules/MAS/config/settings.py`.
 
 ## Configuration
 
@@ -148,8 +175,6 @@ Primary local endpoints:
 
 - React UI: `http://localhost:5173`
 - UI API: `http://localhost:8088/api/health`
-- DPS Streamlit dashboard: `http://localhost:8501`
-- FEED Streamlit UI: `http://localhost:8502`
 - Azure Functions host: `http://localhost:7071`
 - News provider health: `http://localhost:8080/health`
 - Elasticsearch: `http://localhost:9200`
@@ -157,19 +182,19 @@ Primary local endpoints:
 
 ## Frontend Migration Notes
 
-The React migration is partially complete.
+The React UI is the supported frontend.
 
 - `UI_API` already exposes read endpoints for clients, portfolios, insights, ops metrics, recent news, and recent insights.
-- `UI_API` also exposes manual pipeline endpoints for file upload and sample runs.
+- The active `UI_API` app is currently read-focused; older pipeline helper code remains in the repo but is commented out in the live FastAPI surface.
 - `src/ui` already provides `/ops` and `/clients` routes.
-- Streamlit remains in place while missing interactions and views are ported.
+- Older migration notes remain in the repo for historical context, but the Streamlit runtime path has been retired.
 
 See [docs/react-ui-migration.md](/home/harshathvenkastesh/Desktop/SMIF/docs/react-ui-migration.md) for the current migration checklist.
 
 ## Current Gaps / Assumptions
 
-- The sample pipeline endpoint in `UI_API` is defensive and reports disabled status if `src/app/modules/DPS/news_raw` is not present.
-- The legacy Streamlit services are still part of the default Docker runtime.
+- `UI_API` is Mongo-backed in the current implementation, so live UI correctness depends on Mongo being available and current.
+- The sample pipeline helper code in `UI_API` is present but not mounted as active routes.
 - The project expects a real `.env` file at `src/.env`; code in `app/common/azure_services/settings.py` raises immediately if that file is missing.
 
 ## Useful Entry Points
