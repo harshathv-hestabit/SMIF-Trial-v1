@@ -100,6 +100,7 @@ class LLMClient:
                 "api_key": settings.LLM_API_KEY,
                 "base_url": settings.LLM_BASE_URL,
                 "temperature": settings.LLM_TEMPERATURE,
+                "max_completion_tokens": settings.MAX_COMPLETION_TOKENS
             }
 
         if provider == "gemini":

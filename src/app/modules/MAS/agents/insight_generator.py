@@ -47,6 +47,7 @@ def _record_token_usage(state: dict, *, agent: str, usage: dict) -> None:
         {
             "agent": agent,
             "iteration": state.get("iterations", 0) + 1,
+            "execution_route": state.get("execution_route", "full_loop"),
             **usage,
         }
     )
@@ -136,6 +137,7 @@ Rules:
             "iteration": state.get("iterations", 0) + 1,
             "profile": compact_profile or {},
             "prompt_char_count": len(prompt),
+            "execution_route": state.get("execution_route", "full_loop"),
         },
     )
     append_insight_log(
@@ -145,6 +147,7 @@ Rules:
             "agent": "insight_generator",
             "iteration": state.get("iterations", 0) + 1,
             "prompt": prompt,
+            "execution_route": state.get("execution_route", "full_loop"),
         },
     )
     result = await llm.call_text_with_usage([
@@ -167,6 +170,7 @@ Rules:
         payload={
             "agent": "insight_generator",
             "iteration": state.get("iterations", 0) + 1,
+            "execution_route": state.get("execution_route", "full_loop"),
             **usage,
         },
     )

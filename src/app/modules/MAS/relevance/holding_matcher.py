@@ -275,7 +275,7 @@ def _match_single_holding(
     issuer = _normalize_keyword(holding.get("issuer_normalized") or holding.get("issuer_name"))
     description = _normalize_keyword(holding.get("description"))
     classification = _normalize_keyword(holding.get("classification"))
-    currency = _normalize_keyword(holding.get("currency"))
+    holding_currencies = _holding_currency_values(holding)
 
     match_type = ""
     reasons: list[str] = []
@@ -306,9 +306,15 @@ def _match_single_holding(
         match_type = "direct_issuer"
         directness = "direct"
         reasons.extend([f"news_issuer={issuer}", f"holding_issuer={issuer}"])
-    elif currency and currency in mentioned_currencies:
+    elif holding_currencies and mentioned_currencies and holding_currencies & mentioned_currencies:
+        matched_currency = sorted(holding_currencies & mentioned_currencies)[0]
         match_type = "indirect_currency"
-        reasons.extend([f"news_currency={currency}", f"holding_currency={currency}"])
+        reasons.extend(
+            [
+                f"news_currency={matched_currency}",
+                f"holding_currency={matched_currency}",
+            ]
+        )
     elif classification and classification in matched_classifications:
         match_type = "indirect_macro_allocation"
         reasons.extend(
@@ -375,7 +381,25 @@ def _collect_supported_currencies(
     for holding in holdings:
         if not isinstance(holding, dict):
             continue
-        currency = _normalize_keyword(holding.get("currency"))
-        if currency:
-            currencies.add(currency)
+        currencies.update(_holding_currency_values(holding))
     return currencies
+
+
+def _holding_currency_values(holding: dict[str, Any]) -> set[str]:
+    values = holding.get("currency_values")
+    if isinstance(values, list):
+        return {
+            _normalize_keyword(value)
+            for value in values
+            if _normalize_keyword(value)
+        }
+    raw_currency = _normalize_keyword(holding.get("currency"))
+    if not raw_currency:
+        return set()
+    if "," not in raw_currency:
+        return {raw_currency}
+    return {
+        _normalize_keyword(part)
+        for part in raw_currency.split(",")
+        if _normalize_keyword(part)
+    }

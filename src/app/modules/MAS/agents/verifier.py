@@ -51,6 +51,7 @@ def _record_token_usage(state: dict, *, agent: str, usage: dict) -> None:
         {
             "agent": agent,
             "iteration": state.get("iterations", 0),
+            "execution_route": state.get("execution_route", "full_loop"),
             **usage,
         }
     )
@@ -238,6 +239,7 @@ Constraints:
             "iteration": state.get("iterations", 0),
             "profile": compact_profile or {},
             "prompt_char_count": len(prompt),
+            "execution_route": state.get("execution_route", "full_loop"),
         },
     )
     append_insight_log(
@@ -247,6 +249,7 @@ Constraints:
             "agent": "verifier",
             "iteration": state.get("iterations", 0),
             "prompt": prompt,
+            "execution_route": state.get("execution_route", "full_loop"),
         },
     )
 
@@ -271,6 +274,7 @@ Constraints:
         payload={
             "agent": "verifier",
             "iteration": state.get("iterations", 0),
+            "execution_route": state.get("execution_route", "full_loop"),
             **usage,
         },
     )

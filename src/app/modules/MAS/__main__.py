@@ -47,6 +47,9 @@ async def run_hnw_workflow(event_body: dict) -> dict:
         "news_doc": None,
         "relevance_results": {},
         "candidate_clients": [],
+        "grounded_candidates": [],
+        "routed_candidates": [],
+        "skipped_candidates": [],
         "generate_insight_events": [],
     }
     result = await asyncio.to_thread(hnw_graph.invoke, initial_state)
@@ -70,6 +73,9 @@ async def run_standard_workflow(event_body: dict) -> dict:
         "news_batch": [],
         "relevance_results": {},
         "relevance_map": [],
+        "grounded_relevance_map": [],
+        "routed_relevance_map": [],
+        "skipped_relevance_map": [],
         "generate_insight_events": [],
     }
     result = await asyncio.to_thread(standard_graph.invoke, initial_state)
@@ -94,10 +100,11 @@ async def run_generate_insight_workflow(event_body: dict) -> dict:
         news_container=settings.NEWS_CONTAINER,
     )
     logger.info(
-        "workflow_started workflow=generate_insight client_id=%s news_doc_id=%s job_key=%s",
+        "workflow_started workflow=generate_insight client_id=%s news_doc_id=%s job_key=%s route=%s",
         client_id,
         news_doc_id,
         job_key,
+        event_body.get("execution_route", "full_loop"),
     )
     log_file_path = initialize_insight_log(
         client_id=client_id,
@@ -109,17 +116,33 @@ async def run_generate_insight_workflow(event_body: dict) -> dict:
             partition_key=partition_key,
             stage="generate_insight",
             status="processing",
-            details={"client_id": client_id, "job_key": job_key},
+            details={
+                "client_id": client_id,
+                "job_key": job_key,
+                "execution_route": event_body.get("execution_route", "full_loop"),
+            },
         )
+    matched_holdings = event_body.get("matched_holdings", [])
     initial_state: InsightState = {
         "client_id": client_id,
         "news_document": event_body.get("news_document", {}),
         "client_portfolio_document": event_body.get("client_portfolio_document", {}),
         "matched_tickers": event_body.get("matched_tickers", event_body.get("matched_isins", [])),
+        "matched_symbols": event_body.get("matched_symbols", []),
         "matched_tags": event_body.get("matched_tags", []),
-        "matched_holdings": event_body.get("matched_holdings", []),
+        "matched_holdings": matched_holdings,
+        "matched_holdings_count": int(
+            event_body.get("matched_holdings_count", len(matched_holdings)) or 0
+        ),
         "relevance_score": float(event_body.get("relevance_score", 0.0) or 0.0),
         "relevance": event_body.get("relevance", {}),
+        "grounded_relevance": str(
+            event_body.get("grounded_relevance")
+            or (event_body.get("relevance", {}) or {}).get("grounded_relevance", "")
+        ),
+        "execution_route": str(event_body.get("execution_route") or "full_loop"),
+        "route_reason": str(event_body.get("route_reason") or ""),
+        "security_type_alignment": event_body.get("security_type_alignment"),
         "portfolio_snapshot": event_body.get("portfolio_snapshot", {}),
         "client_profile_summary": event_body.get("client_profile_summary", {}),
         "job_key": job_key,
@@ -135,6 +158,7 @@ async def run_generate_insight_workflow(event_body: dict) -> dict:
         "compact_portfolio_profile": {},
         "precheck_passed": False,
         "precheck_reason": "",
+        "verifier_invoked": False,
         "token_usage": {
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -142,6 +166,18 @@ async def run_generate_insight_workflow(event_body: dict) -> dict:
             "calls": [],
         },
     }
+    append_insight_log(
+        log_file_path,
+        event="workflow_route_received",
+        payload={
+            "execution_route": initial_state["execution_route"],
+            "route_reason": initial_state["route_reason"],
+            "grounded_relevance": initial_state["grounded_relevance"],
+            "matched_holdings_count": initial_state["matched_holdings_count"],
+            "matched_symbols": initial_state["matched_symbols"],
+            "security_type_alignment": initial_state["security_type_alignment"],
+        },
+    )
     try:
         result = await insight_graph.ainvoke(initial_state)
         append_insight_log(
@@ -151,16 +187,24 @@ async def run_generate_insight_workflow(event_body: dict) -> dict:
                 "status": result["status"],
                 "verification_score": result["verification_score"],
                 "iterations": result["iterations"],
+                "execution_route": result.get("execution_route"),
+                "route_reason": result.get("route_reason"),
+                "grounded_relevance": result.get("grounded_relevance"),
+                "matched_holdings_count": result.get("matched_holdings_count"),
+                "matched_symbols": result.get("matched_symbols"),
+                "verifier_invoked": result.get("verifier_invoked", False),
                 "token_usage": result.get("token_usage", {}),
             },
         )
         logger.info(
-            "workflow_completed workflow=generate_insight client_id=%s news_doc_id=%s job_key=%s status=%s score=%s total_tokens=%s",
+            "workflow_completed workflow=generate_insight client_id=%s news_doc_id=%s job_key=%s status=%s route=%s score=%s verifier_invoked=%s total_tokens=%s",
             client_id,
             news_doc_id,
             job_key,
             result["status"],
+            result.get("execution_route"),
             result["verification_score"],
+            result.get("verifier_invoked", False),
             result.get("token_usage", {}).get("total_tokens", 0),
         )
         if news_doc_id:
@@ -174,6 +218,12 @@ async def run_generate_insight_workflow(event_body: dict) -> dict:
                     "job_key": job_key,
                     "verification_score": result["verification_score"],
                     "iterations": result["iterations"],
+                    "execution_route": result.get("execution_route"),
+                    "route_reason": result.get("route_reason"),
+                    "grounded_relevance": result.get("grounded_relevance"),
+                    "matched_holdings_count": result.get("matched_holdings_count"),
+                    "matched_symbols": result.get("matched_symbols"),
+                    "verifier_invoked": result.get("verifier_invoked", False),
                     "token_usage": result.get("token_usage", {}),
                 },
             )

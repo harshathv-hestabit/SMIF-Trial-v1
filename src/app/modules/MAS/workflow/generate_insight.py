@@ -1,5 +1,6 @@
 from typing import TypedDict
-from langgraph.graph import StateGraph, END
+
+from langgraph.graph import END, StateGraph
 
 from ..agents.insight_generator import generate_insight_agent
 from ..agents.verifier import verify_insight_agent
@@ -12,10 +13,16 @@ class InsightState(TypedDict):
     news_document: dict
     client_portfolio_document: dict
     matched_tickers: list[str]
+    matched_symbols: list[str]
     matched_tags: list[str]
     matched_holdings: list[dict]
+    matched_holdings_count: int
     relevance_score: float
     relevance: dict
+    grounded_relevance: str
+    execution_route: str
+    route_reason: str
+    security_type_alignment: bool | None
     portfolio_snapshot: dict
     client_profile_summary: dict
     job_key: str
@@ -32,11 +39,14 @@ class InsightState(TypedDict):
     compact_portfolio_profile: dict
     precheck_passed: bool
     precheck_reason: str
+    verifier_invoked: bool
 
 
 SCORE_THRESHOLD = 75.0
 MAX_ITERATIONS = 3
-MAX_DRAFT_WORDS = 130
+FULL_LOOP_ROUTE = "full_loop"
+SINGLE_PASS_ROUTE = "single_pass_indirect"
+SKIP_ROUTE = "skip"
 
 
 def _word_count(text: str) -> int:
@@ -76,13 +86,39 @@ def _compact_payload_char_count(payload: dict) -> int:
     )
 
 
-async def generate_insight(state):
+def _route_payload(state: InsightState) -> dict:
+    return {
+        "execution_route": state.get("execution_route", FULL_LOOP_ROUTE),
+        "route_reason": state.get("route_reason", ""),
+        "grounded_relevance": state.get("grounded_relevance", ""),
+        "matched_holdings_count": state.get("matched_holdings_count", 0),
+        "matched_symbols": state.get("matched_symbols", []),
+        "security_type_alignment": state.get("security_type_alignment"),
+        "verifier_invoked": state.get("verifier_invoked", False),
+    }
+
+
+def initialize_execution_route(state: InsightState) -> InsightState:
+    route = str(state.get("execution_route") or FULL_LOOP_ROUTE).strip() or FULL_LOOP_ROUTE
+    if route not in {FULL_LOOP_ROUTE, SINGLE_PASS_ROUTE, SKIP_ROUTE}:
+        route = FULL_LOOP_ROUTE
+    state["execution_route"] = route
+    append_insight_log(
+        state.get("log_file_path"),
+        event="execution_route_initialized",
+        payload=_route_payload(state),
+    )
+    return state
+
+
+async def generate_insight(state: InsightState) -> InsightState:
     append_insight_log(
         state.get("log_file_path"),
         event="agent_invoked",
         payload={
             "agent": "insight_generator",
             "next_iteration": state.get("iterations", 0) + 1,
+            "execution_route": state.get("execution_route", FULL_LOOP_ROUTE),
         },
     )
     insight = await generate_insight_agent(state)
@@ -95,12 +131,13 @@ async def generate_insight(state):
             "agent": "insight_generator",
             "iteration": state["iterations"],
             "insight_draft": insight,
+            "execution_route": state.get("execution_route", FULL_LOOP_ROUTE),
         },
     )
     return state
 
 
-async def precheck_insight(state):
+async def precheck_insight(state: InsightState) -> InsightState:
     draft = str(state.get("insight_draft") or "").strip()
     compact_context = state.get("compact_portfolio_context") or {}
     direct_overlap = compact_context.get("news_symbol_overlap") or []
@@ -115,10 +152,6 @@ async def precheck_insight(state):
         passed = False
         reason = "empty_draft"
         feedback = "Draft is empty. Produce a complete insight under 120 words."
-    elif word_count > MAX_DRAFT_WORDS:
-        passed = False
-        reason = "too_long"
-        feedback = "Draft is too long. Keep it under 120 words and tighten to one actionable point."
     elif not direct_overlap:
         if "no direct" not in lower_draft:
             passed = False
@@ -152,18 +185,21 @@ async def precheck_insight(state):
             "reason": reason,
             "word_count": word_count,
             "direct_overlap_count": len(direct_overlap),
+            "execution_route": state.get("execution_route", FULL_LOOP_ROUTE),
         },
     )
     return state
 
 
-async def verify_insight(state):
+async def verify_insight(state: InsightState) -> InsightState:
+    state["verifier_invoked"] = True
     append_insight_log(
         state.get("log_file_path"),
         event="agent_invoked",
         payload={
             "agent": "verifier",
             "iteration": state.get("iterations", 0),
+            "execution_route": state.get("execution_route", FULL_LOOP_ROUTE),
         },
     )
     result = await verify_insight_agent(state)
@@ -196,13 +232,14 @@ async def verify_insight(state):
             "full_feedback_char_count": full_feedback_len,
             "compact_payload_char_count": compact_payload_len,
             "compaction_occurred": compacted,
+            "execution_route": state.get("execution_route", FULL_LOOP_ROUTE),
         },
     )
     return state
 
 
-async def save_insight(state):
-    state["status"] = "verified"
+async def _persist_insight(state: InsightState, *, status: str) -> InsightState:
+    state["status"] = status
     append_insight_log(
         state.get("log_file_path"),
         event="insight_persist_started",
@@ -210,6 +247,7 @@ async def save_insight(state):
             "iteration": state.get("iterations", 0),
             "status": state["status"],
             "token_usage": state.get("token_usage", {}),
+            **_route_payload(state),
         },
     )
     await update_db(state)
@@ -220,6 +258,49 @@ async def save_insight(state):
             "iteration": state.get("iterations", 0),
             "status": state["status"],
             "token_usage": state.get("token_usage", {}),
+            **_route_payload(state),
+        },
+    )
+    return state
+
+
+async def save_insight(state: InsightState) -> InsightState:
+    return await _persist_insight(state, status="verified")
+
+
+async def save_single_pass_insight(state: InsightState) -> InsightState:
+    state["verification_feedback"] = "Verifier skipped for single_pass_indirect route."
+    state["verification_full_feedback"] = state["verification_feedback"]
+    state["revision_guidance"] = {
+        "needs_revision": False,
+        "score": 0.0,
+        "severity": "low",
+        "issues": [],
+        "rewrite_guidance": [],
+    }
+    append_insight_log(
+        state.get("log_file_path"),
+        event="single_pass_completed",
+        payload={
+            "iteration": state.get("iterations", 0),
+            "token_usage": state.get("token_usage", {}),
+            **_route_payload(state),
+        },
+    )
+    return await _persist_insight(state, status="single_pass_completed")
+
+
+def skip_execution(state: InsightState) -> InsightState:
+    state["status"] = "skipped"
+    state["verification_feedback"] = state.get("route_reason", "")
+    state["verification_full_feedback"] = state.get("route_reason", "")
+    append_insight_log(
+        state.get("log_file_path"),
+        event="workflow_skipped",
+        payload={
+            "iteration": state.get("iterations", 0),
+            "token_usage": state.get("token_usage", {}),
+            **_route_payload(state),
         },
     )
     return state
@@ -240,9 +321,51 @@ def log_failure(state: InsightState) -> InsightState:
             "full_feedback": state.get("verification_full_feedback", ""),
             "revision_guidance": state.get("revision_guidance", {}),
             "token_usage": state.get("token_usage", {}),
+            **_route_payload(state),
         },
     )
     return state
+
+
+def route_at_entry(state: InsightState) -> str:
+    route = str(state.get("execution_route") or FULL_LOOP_ROUTE)
+    if route == SKIP_ROUTE:
+        append_insight_log(
+            state.get("log_file_path"),
+            event="execution_route_routed",
+            payload={"decision": "skip", **_route_payload(state)},
+        )
+        return "skip"
+    append_insight_log(
+        state.get("log_file_path"),
+        event="execution_route_routed",
+        payload={"decision": "generate", **_route_payload(state)},
+    )
+    return "generate"
+
+
+def route_after_generation(state: InsightState) -> str:
+    if state.get("execution_route") == SINGLE_PASS_ROUTE:
+        append_insight_log(
+            state.get("log_file_path"),
+            event="generation_routed",
+            payload={
+                "decision": "save_single_pass",
+                "iterations": state.get("iterations", 0),
+                **_route_payload(state),
+            },
+        )
+        return "save_single_pass"
+    append_insight_log(
+        state.get("log_file_path"),
+        event="generation_routed",
+        payload={
+            "decision": "precheck",
+            "iterations": state.get("iterations", 0),
+            **_route_payload(state),
+        },
+    )
+    return "precheck"
 
 
 def route_after_verification(state: InsightState) -> str:
@@ -254,6 +377,7 @@ def route_after_verification(state: InsightState) -> str:
                 "decision": "save",
                 "score": state["verification_score"],
                 "threshold": SCORE_THRESHOLD,
+                **_route_payload(state),
             },
         )
         return "save"
@@ -266,6 +390,7 @@ def route_after_verification(state: InsightState) -> str:
                 "score": state["verification_score"],
                 "threshold": SCORE_THRESHOLD,
                 "iterations": state["iterations"],
+                **_route_payload(state),
             },
         )
         return "fail"
@@ -279,6 +404,7 @@ def route_after_verification(state: InsightState) -> str:
             "iterations": state["iterations"],
             "feedback": state.get("verification_feedback", ""),
             "revision_guidance": state.get("revision_guidance", {}),
+            **_route_payload(state),
         },
     )
     return "regenerate"
@@ -292,6 +418,7 @@ def route_after_precheck(state: InsightState) -> str:
             payload={
                 "decision": "verify",
                 "iterations": state.get("iterations", 0),
+                **_route_payload(state),
             },
         )
         return "verify"
@@ -303,6 +430,7 @@ def route_after_precheck(state: InsightState) -> str:
                 "decision": "fail",
                 "iterations": state.get("iterations", 0),
                 "reason": state.get("precheck_reason", ""),
+                **_route_payload(state),
             },
         )
         return "fail"
@@ -315,6 +443,7 @@ def route_after_precheck(state: InsightState) -> str:
             "reason": state.get("precheck_reason", ""),
             "feedback": state.get("verification_feedback", ""),
             "revision_guidance": state.get("revision_guidance", {}),
+            **_route_payload(state),
         },
     )
     return "regenerate"
@@ -322,14 +451,32 @@ def route_after_precheck(state: InsightState) -> str:
 
 def build_insight_graph() -> StateGraph:
     g = StateGraph(InsightState)
+    g.add_node("initialize_route", initialize_execution_route)
     g.add_node("generate", generate_insight)
     g.add_node("precheck", precheck_insight)
     g.add_node("verify", verify_insight)
     g.add_node("save", save_insight)
+    g.add_node("save_single_pass", save_single_pass_insight)
+    g.add_node("skip", skip_execution)
     g.add_node("fail", log_failure)
 
-    g.set_entry_point("generate")
-    g.add_edge("generate", "precheck")
+    g.set_entry_point("initialize_route")
+    g.add_conditional_edges(
+        "initialize_route",
+        route_at_entry,
+        {
+            "generate": "generate",
+            "skip": "skip",
+        },
+    )
+    g.add_conditional_edges(
+        "generate",
+        route_after_generation,
+        {
+            "precheck": "precheck",
+            "save_single_pass": "save_single_pass",
+        },
+    )
     g.add_conditional_edges(
         "precheck",
         route_after_precheck,
@@ -349,5 +496,7 @@ def build_insight_graph() -> StateGraph:
         },
     )
     g.add_edge("save", END)
+    g.add_edge("save_single_pass", END)
+    g.add_edge("skip", END)
     g.add_edge("fail", END)
     return g.compile()

@@ -22,6 +22,7 @@ from ..relevance import (
     ground_candidate_against_holdings,
 )
 from ..util import EventExecutor
+from .execution_routing import assign_execution_route
 
 
 RELEVANCE_THRESHOLD = float(settings.RELEVANCE_MIN_SCORE)
@@ -42,6 +43,8 @@ class StandardState(TypedDict):
     relevance_results: dict[str, list[dict]]
     relevance_map: list[dict]
     grounded_relevance_map: list[dict]
+    routed_relevance_map: list[dict]
+    skipped_relevance_map: list[dict]
     generate_insight_events: list[dict]
 
 
@@ -190,19 +193,62 @@ def ground_relevance(state: StandardState) -> StandardState:
     return state
 
 
-def create_insight_events(state: StandardState) -> StandardState:
-    events = []
+def route_grounded_relevance(state: StandardState) -> StandardState:
+    routed_map = []
+    skipped_map = []
     for pair in state["grounded_relevance_map"]:
-        news_doc = pair["news_document"]
         candidate = pair["candidate"]
+        news_doc = pair["news_document"]
+        grounding = pair["grounding"]
         profile = candidate.get("search_relevance_profile", {}) or {}
-        grounding = pair.get("grounding", {}) or {}
-        relevance = build_relevance_payload(candidate, grounding)
         compact_context = build_compact_portfolio_context_from_grounding(
             news_doc=news_doc,
             profile=profile,
             grounding=grounding,
         )
+        route_metadata = assign_execution_route(
+            news_doc=news_doc,
+            candidate=candidate,
+            grounding=grounding,
+            compact_context=compact_context,
+        )
+        routed_pair = {
+            **pair,
+            "compact_portfolio_context": compact_context,
+            **route_metadata,
+        }
+        print(
+            "[Route] "
+            f"workflow=standard client_id={pair['client_id']} news_id={pair['news_id']} "
+            f"route={route_metadata['execution_route']} "
+            f"grounded_relevance={route_metadata['grounded_relevance']} "
+            f"matched_holdings_count={route_metadata['matched_holdings_count']} "
+            f"matched_symbols={route_metadata['matched_symbols']} "
+            f"reason={route_metadata['route_reason']}"
+        )
+        if route_metadata["execution_route"] == "skip":
+            skipped_map.append(routed_pair)
+        else:
+            routed_map.append(routed_pair)
+
+    state["routed_relevance_map"] = routed_map
+    state["skipped_relevance_map"] = skipped_map
+    print(
+        f"[Standard] Routed map: {len(routed_map)} dispatchable pairs, "
+        f"{len(skipped_map)} skipped pairs"
+    )
+    return state
+
+
+def create_insight_events(state: StandardState) -> StandardState:
+    events = []
+    for pair in state["routed_relevance_map"]:
+        news_doc = pair["news_document"]
+        candidate = pair["candidate"]
+        profile = candidate.get("search_relevance_profile", {}) or {}
+        grounding = pair.get("grounding", {}) or {}
+        relevance = build_relevance_payload(candidate, grounding)
+        compact_context = pair.get("compact_portfolio_context", {})
         overflow = grounding.get("overflow", {}) if isinstance(grounding, dict) else {}
         included = int(overflow.get("matched_holding_count_included", 0) or 0)
         total = int(overflow.get("matched_holding_count_total", 0) or 0)
@@ -228,6 +274,12 @@ def create_insight_events(state: StandardState) -> StandardState:
                 "matched_tickers": candidate.get("matched_tickers", []),
                 "matched_tags": candidate.get("matched_tags", []),
                 "relevance_score": relevance["candidate_score"],
+                "execution_route": pair["execution_route"],
+                "route_reason": pair["route_reason"],
+                "grounded_relevance": pair["grounded_relevance"],
+                "matched_holdings_count": pair["matched_holdings_count"],
+                "matched_symbols": pair["matched_symbols"],
+                "security_type_alignment": pair["security_type_alignment"],
                 "priority": "scheduled",
                 "source": "mas.standard_workflow",
             }
@@ -241,35 +293,53 @@ def create_insight_events(state: StandardState) -> StandardState:
             executor.publish_insight_events(events)
 
     queued_counts = Counter(event["news_doc_id"] for event in events)
+    skipped_counts = Counter(pair["news_id"] for pair in state.get("skipped_relevance_map", []))
     job_id = state["trigger_event"].get("job_id")
 
     for news_doc in state["news_batch"]:
         queued_events = queued_counts.get(news_doc["id"], 0)
+        skipped_events = skipped_counts.get(news_doc["id"], 0)
         _record_news_stage(
             news_doc,
             stage="mas_standard",
             status="completed",
-            details={"job_id": job_id, "candidate_count": queued_events},
+            details={
+                "job_id": job_id,
+                "candidate_count": queued_events,
+                "skipped_candidates": skipped_events,
+            },
         )
         if queued_events:
             _record_news_stage(
                 news_doc,
                 stage="generate_insight_queue",
                 status="queued",
-                details={"queued_events": queued_events, "workflow": "standard"},
+                details={
+                    "queued_events": queued_events,
+                    "workflow": "standard",
+                    "skipped_candidates": skipped_events,
+                },
             )
             _record_news_stage(
                 news_doc,
                 stage="retail_batch",
                 status="dispatched",
-                details={"job_id": job_id, "queued_events": queued_events},
+                details={
+                    "job_id": job_id,
+                    "queued_events": queued_events,
+                    "skipped_candidates": skipped_events,
+                },
             )
         else:
             _record_news_stage(
                 news_doc,
                 stage="retail_batch",
                 status="no_matches",
-                details={"job_id": job_id, "queued_events": 0},
+                details={
+                    "job_id": job_id,
+                    "queued_events": 0,
+                    "skipped_candidates": skipped_events,
+                },
             )
 
     return state
@@ -285,6 +355,7 @@ def build_standard_graph() -> StateGraph:
     g.add_node("fetch_news", fetch_news_batch)
     g.add_node("map_relevance", map_relevance)
     g.add_node("ground_relevance", ground_relevance)
+    g.add_node("route_grounded_relevance", route_grounded_relevance)
     g.add_node("create_events", create_insight_events)
 
     g.set_entry_point("activate")
@@ -295,6 +366,7 @@ def build_standard_graph() -> StateGraph:
         {"map_relevance": "map_relevance", END: END},
     )
     g.add_edge("map_relevance", "ground_relevance")
-    g.add_edge("ground_relevance", "create_events")
+    g.add_edge("ground_relevance", "route_grounded_relevance")
+    g.add_edge("route_grounded_relevance", "create_events")
     g.add_edge("create_events", END)
     return g.compile()

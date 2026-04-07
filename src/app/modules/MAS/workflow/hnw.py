@@ -18,6 +18,7 @@ from ..relevance import (
     ground_candidate_against_holdings,
 )
 from ..util import EventExecutor
+from .execution_routing import assign_execution_route
 
 cosmos_client = build_sync_cosmos_client(settings.COSMOS_URL, settings.COSMOS_KEY)
 
@@ -33,6 +34,8 @@ class HNWState(TypedDict):
     relevance_results: dict[str, list[dict]]
     candidate_clients: list[dict]
     grounded_candidates: list[dict]
+    routed_candidates: list[dict]
+    skipped_candidates: list[dict]
     generate_insight_events: list[dict]
 
 
@@ -135,19 +138,61 @@ def ground_candidates(state: HNWState) -> HNWState:
     return state
 
 
-def create_insight_events(state: HNWState) -> HNWState:
+def route_grounded_candidates(state: HNWState) -> HNWState:
     news_doc = state["news_doc"]
-    events = []
-    for client in state["grounded_candidates"]:
-        cid = client["client_id"]
-        profile = client.get("search_relevance_profile", {}) or {}
-        grounding = client.get("grounding", {}) or {}
-        relevance = build_relevance_payload(client, grounding)
+    routed: list[dict] = []
+    skipped: list[dict] = []
+    for candidate in state["grounded_candidates"]:
+        profile = candidate.get("search_relevance_profile", {}) or {}
+        grounding = candidate.get("grounding", {}) or {}
         compact_context = build_compact_portfolio_context_from_grounding(
             news_doc=news_doc,
             profile=profile,
             grounding=grounding,
         )
+        route_metadata = assign_execution_route(
+            news_doc=news_doc,
+            candidate=candidate,
+            grounding=grounding,
+            compact_context=compact_context,
+        )
+        routed_candidate = {
+            **candidate,
+            "compact_portfolio_context": compact_context,
+            **route_metadata,
+        }
+        print(
+            "[Route] "
+            f"workflow=hnw client_id={candidate['client_id']} news_id={news_doc['id']} "
+            f"route={route_metadata['execution_route']} "
+            f"grounded_relevance={route_metadata['grounded_relevance']} "
+            f"matched_holdings_count={route_metadata['matched_holdings_count']} "
+            f"matched_symbols={route_metadata['matched_symbols']} "
+            f"reason={route_metadata['route_reason']}"
+        )
+        if route_metadata["execution_route"] == "skip":
+            skipped.append(routed_candidate)
+        else:
+            routed.append(routed_candidate)
+
+    state["routed_candidates"] = routed
+    state["skipped_candidates"] = skipped
+    print(
+        f"[HNW] Routed candidates: {[c['client_id'] for c in routed]} "
+        f"skipped={[c['client_id'] for c in skipped]}"
+    )
+    return state
+
+
+def create_insight_events(state: HNWState) -> HNWState:
+    news_doc = state["news_doc"]
+    events = []
+    for client in state["routed_candidates"]:
+        cid = client["client_id"]
+        profile = client.get("search_relevance_profile", {}) or {}
+        grounding = client.get("grounding", {}) or {}
+        relevance = build_relevance_payload(client, grounding)
+        compact_context = client.get("compact_portfolio_context", {})
         overflow = grounding.get("overflow", {}) if isinstance(grounding, dict) else {}
         included = int(overflow.get("matched_holding_count_included", 0) or 0)
         total = int(overflow.get("matched_holding_count_total", 0) or 0)
@@ -173,6 +218,12 @@ def create_insight_events(state: HNWState) -> HNWState:
                 "matched_tickers": client.get("matched_tickers", []),
                 "matched_tags": client.get("matched_tags", []),
                 "relevance_score": relevance["candidate_score"],
+                "execution_route": client["execution_route"],
+                "route_reason": client["route_reason"],
+                "grounded_relevance": client["grounded_relevance"],
+                "matched_holdings_count": client["matched_holdings_count"],
+                "matched_symbols": client["matched_symbols"],
+                "security_type_alignment": client["security_type_alignment"],
                 "priority": "realtime",
                 "source": "mas.hnw_workflow",
             }
@@ -180,13 +231,17 @@ def create_insight_events(state: HNWState) -> HNWState:
     state["generate_insight_events"] = events
 
     print(f"[HNW] Created {len(events)} insight events")
+    skipped_count = len(state.get("skipped_candidates", []))
 
     if events:
         _record_news_stage(
             news_doc,
             stage="mas_hnw",
             status="completed",
-            details={"candidate_count": len(events)},
+            details={
+                "candidate_count": len(events),
+                "skipped_candidates": skipped_count,
+            },
         )
         with EventExecutor() as executor:
             executor.publish_insight_events(events)
@@ -194,14 +249,20 @@ def create_insight_events(state: HNWState) -> HNWState:
             news_doc,
             stage="generate_insight_queue",
             status="queued",
-            details={"queued_events": len(events)},
+            details={
+                "queued_events": len(events),
+                "skipped_candidates": skipped_count,
+            },
         )
     else:
         _record_news_stage(
             news_doc,
             stage="mas_hnw",
             status="completed",
-            details={"candidate_count": 0},
+            details={
+                "candidate_count": 0,
+                "skipped_candidates": skipped_count,
+            },
         )
 
     return state
@@ -219,6 +280,7 @@ def build_hnw_graph() -> StateGraph:
     g.add_node("score", score_relevance)
     g.add_node("filter", filter_candidates)
     g.add_node("ground", ground_candidates)
+    g.add_node("route_grounded", route_grounded_candidates)
     g.add_node("create_events", create_insight_events)
 
     g.set_entry_point("activate")
@@ -233,7 +295,8 @@ def build_hnw_graph() -> StateGraph:
 
     g.add_edge("score", "filter")
     g.add_edge("filter", "ground")
-    g.add_edge("ground", "create_events")
+    g.add_edge("ground", "route_grounded")
+    g.add_edge("route_grounded", "create_events")
     g.add_edge("create_events", END)
 
     return g.compile()

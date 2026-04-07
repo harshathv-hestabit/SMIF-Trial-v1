@@ -1,3 +1,4 @@
+import ast
 import json
 import re
 import time
@@ -88,6 +89,7 @@ class CanonicalHolding:
     front_type: str = ""
     act_type: str = ""
     currency: str = ""
+    currency_values: list[str] = field(default_factory=list)
     market_value_aed: float = 0.0
     market_value_local: float = 0.0
     quantity: float = 0.0
@@ -120,6 +122,7 @@ class ClientPortfolio:
     currencies: list[str]
     asset_class_weights: dict[str, float]
     asset_type_weights: dict[str, float]
+    major_sectors: list[str] = field(default_factory=list)
     broad_tags_of_interest: list[str] = field(default_factory=list)
     compact_summary_text: str = ""
     holdings: list[CanonicalHolding] = field(default_factory=list)
@@ -303,10 +306,10 @@ def client_profile_to_document(
         "currencies": portfolio.currencies,
         "asset_class_weights": portfolio.asset_class_weights,
         "asset_type_weights": portfolio.asset_type_weights,
+        "major_sectors": portfolio.major_sectors,
         "broad_tags_of_interest": portfolio.broad_tags_of_interest,
         "major_tickers": major_tickers,
         "major_issuers": major_issuers,
-        "major_sectors": [],
         "major_asset_descriptions": top_descriptions,
         "compact_summary_text": portfolio.compact_summary_text,
         "classification_weights": portfolio.asset_class_weights,
@@ -358,6 +361,7 @@ def canonical_holding_to_document(holding: CanonicalHolding) -> dict:
         "front_type": _none_if_empty(holding.front_type),
         "act_type": _none_if_empty(holding.act_type),
         "currency": _none_if_empty(holding.currency),
+        "currency_values": holding.currency_values,
         "market_value_aed": holding.market_value_aed,
         "market_value_local": holding.market_value_local,
         "quantity": holding.quantity,
@@ -396,7 +400,9 @@ def build_client_portfolio(
     asset_types = _sorted_unique(df["Asset Type"])
     asset_subtypes = _sorted_unique(df["Asset Subtype"])
     asset_classifications = _sorted_unique(df["Asset Classification"])
-    currencies = _sorted_unique(df["CCY"])
+    currencies = _sorted_unique_multi(df["CCY"], _parse_currency_values)
+    major_sectors = _rank_weighted_values(df=df, group_field="INDUSTRY_SECTOR")
+    industry_groups = _rank_weighted_values(df=df, group_field="INDUSTRY_GROUP")
     snapshot_id = build_snapshot_id(client_id, as_of)
 
     asset_class_weights = _build_weight_map(
@@ -421,9 +427,8 @@ def build_client_portfolio(
         total_aum_aed=total_aum,
     )
     broad_tags_of_interest = _derive_tags(
-        asset_classifications=asset_classifications,
-        asset_types=asset_types,
-        currencies=currencies,
+        industry_sectors=major_sectors,
+        industry_groups=industry_groups,
     )
     compact_summary_text = _build_compact_summary_text(
         client_name=client_name,
@@ -453,6 +458,7 @@ def build_client_portfolio(
         currencies=currencies,
         asset_class_weights=asset_class_weights,
         asset_type_weights=asset_type_weights,
+        major_sectors=major_sectors,
         broad_tags_of_interest=broad_tags_of_interest,
         compact_summary_text=compact_summary_text,
         holdings=holdings,
@@ -499,6 +505,7 @@ def _build_canonical_holdings(
         asset_id = _clean_string(row.get("Asset ID"))
         asset_type = _clean_string(row.get("Asset Type"))
         asset_subtype = _clean_string(row.get("Asset Subtype"))
+        currency_values = _parse_currency_values(row.get("CCY"))
         market_value_aed = round(_safe_float(row.get(" Market Value AED ")), 6)
         portfolio_weight = round(
             (market_value_aed / total_aum_aed) if total_aum_aed else 0.0,
@@ -515,13 +522,15 @@ def _build_canonical_holdings(
             classification=_clean_string(row.get("Asset Classification")),
             front_type=_clean_string(row.get("FrontType")),
             act_type=_clean_string(row.get("ACTType")),
-            currency=_clean_string(row.get("CCY")),
+            currency=", ".join(currency_values),
+            currency_values=currency_values,
             market_value_aed=market_value_aed,
             market_value_local=round(_safe_float(row.get("Market Value")), 6),
             quantity=round(_safe_float(row.get("Asset Qty")), 6),
             portfolio_weight=portfolio_weight,
             issuer_name=issuer_name,
             issuer_normalized=_normalize_keyword(issuer_name),
+            sector=_clean_string(row.get("INDUSTRY_SECTOR")),
             underlying_ticker=_infer_underlying_ticker(
                 description,
                 asset_type=asset_type,
@@ -574,52 +583,47 @@ def _sorted_unique(series: pd.Series) -> list[str]:
     )
 
 
-def _derive_tags(
-    asset_classifications: list[str],
-    asset_types: list[str],
-    currencies: list[str],
+def _sorted_unique_multi(series: pd.Series, parser) -> list[str]:
+    values: set[str] = set()
+    for raw_value in series.dropna().tolist():
+        values.update(parser(raw_value))
+    return sorted(values)
+
+
+def _rank_weighted_values(
+    *,
+    df: pd.DataFrame,
+    group_field: str,
 ) -> list[str]:
-    tags = set()
+    totals: dict[str, float] = {}
+    labels: dict[str, str] = {}
+    for _, row in df.iterrows():
+        label = _clean_string(row.get(group_field))
+        normalized = _normalize_keyword(label)
+        if not normalized:
+            continue
+        totals[normalized] = totals.get(normalized, 0.0) + max(
+            _safe_float(row.get(" Market Value AED ")),
+            0.0,
+        )
+        labels.setdefault(normalized, label)
+    ranked = sorted(totals.items(), key=lambda item: (-item[1], labels[item[0]]))
+    return [labels[key] for key, _ in ranked]
 
-    classification_tag_map = {
-        "Equities": ["EQUITY MARKETS", "STOCK MARKET", "SHARE PRICE MOVEMENT"],
-        "Fixed Income": ["BOND MARKETS", "INTEREST RATE CHANGES", "CREDIT EVENTS", "YIELD CURVE"],
-        "Real Estate": ["REAL ESTATE", "REIT", "PROPERTY MARKET", "DIVIDEND PAYMENTS"],
-        "Alternatives": ["ALTERNATIVE INVESTMENTS", "STRUCTURED PRODUCTS", "HEDGE FUNDS"],
-        "Commodities": ["COMMODITIES", "RAW MATERIALS", "ENERGY MARKETS", "METALS"],
-        "Multi Assets": ["MULTI-ASSET", "PORTFOLIO REBALANCING", "ASSET ALLOCATION"],
-    }
-    for classification in asset_classifications:
-        tags.update(classification_tag_map.get(classification, []))
 
-    asset_type_tag_map = {
-        "EQUITY": ["IPO", "STOCK SPLIT", "BUYBACK", "DIVIDEND"],
-        "FUNDS": ["FUND FLOWS", "NAV", "ETF", "INDEX TRACKING"],
-        "BOND": ["BOND ISSUANCE", "DEFAULT RISK", "MATURITY", "COUPON"],
-        "FIX_INCOME": ["FIXED INCOME", "DURATION RISK", "SPREAD WIDENING"],
-        "REIT": ["REAL ESTATE", "RENTAL YIELD", "PROPERTY VALUATION"],
-        "ALTERNATIV": ["VOLATILITY", "DERIVATIVES", "OPTIONS"],
-        "CASH": [],
-        "CFTD": [],
-    }
-    for asset_type in asset_types:
-        tags.update(asset_type_tag_map.get(asset_type, []))
-
-    currency_tag_map = {
-        "EUR": ["EURO ZONE", "ECB POLICY", "EUROPEAN MARKETS"],
-        "USD": ["US MARKETS", "FED POLICY", "DOLLAR STRENGTH"],
-        "GBP": ["UK MARKETS", "BOE POLICY"],
-        "JPY": ["JAPAN MARKETS", "BOJ POLICY", "YEN"],
-        "CHF": ["SWISS MARKETS", "SNB POLICY"],
-        "AUD": ["AUSTRALIA MARKETS", "RBA POLICY"],
-        "SGD": ["SINGAPORE MARKETS", "MAS POLICY"],
-        "CNY": ["CHINA MARKETS", "PBOC POLICY", "YUAN"],
-        "HKD": ["HONG KONG MARKETS"],
-    }
-    for currency in currencies:
-        tags.update(currency_tag_map.get(currency, []))
-
-    return sorted(tags)
+def _derive_tags(
+    industry_sectors: list[str],
+    industry_groups: list[str],
+) -> list[str]:
+    ordered_tags: list[str] = []
+    seen: set[str] = set()
+    for value in [*industry_sectors, *industry_groups]:
+        normalized = _normalize_keyword(value)
+        if not normalized or normalized in seen:
+            continue
+        ordered_tags.append(normalized)
+        seen.add(normalized)
+    return ordered_tags
 
 
 def _build_compact_summary_text(
@@ -938,9 +942,40 @@ def _clean_client_id(value: object | None) -> str:
         return text
 
 
+def _parse_currency_values(value: object | None) -> list[str]:
+    text = _clean_string(value)
+    if not text:
+        return []
+
+    candidates: list[object]
+    if text.startswith("[") and text.endswith("]"):
+        try:
+            parsed = ast.literal_eval(text)
+        except (ValueError, SyntaxError):
+            parsed = None
+        if isinstance(parsed, (list, tuple, set)):
+            candidates = list(parsed)
+        else:
+            candidates = [part.strip() for part in text.strip("[]").split(",")]
+    elif "," in text:
+        candidates = [part.strip() for part in text.split(",")]
+    else:
+        candidates = [text]
+
+    currencies: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        normalized = _normalize_keyword(str(candidate).strip().strip("'\""))
+        if not normalized or normalized in seen:
+            continue
+        currencies.append(normalized)
+        seen.add(normalized)
+    return currencies
+
+
 def _safe_float(value: object | None) -> float:
     try:
-        if value in (None, ""):
+        if value in (None, "") or pd.isna(value):
             return 0.0
         return float(value)  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -948,7 +983,14 @@ def _safe_float(value: object | None) -> float:
 
 
 def _clean_string(value: object | None) -> str:
-    return str(value or "").strip()
+    if value is None:
+        return ""
+    try:
+        if pd.isna(value):
+            return ""
+    except TypeError:
+        pass
+    return str(value).strip()
 
 
 def _normalize_keyword(value: object | None) -> str:

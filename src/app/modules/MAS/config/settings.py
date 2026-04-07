@@ -19,6 +19,8 @@ class Settings(AzureServiceEmulatorSettings):
     )
     LLM_MAX_RETRIES: int = Field(3, description="Retries after pool exhaustion")
     LLM_TEMPERATURE: float = Field(0.3, description="Default LLM temperature")
+    MAX_COMPLETION_TOKENS: int = Field(300, description="Token limits for inference")
+    
     REALTIME_WORKFLOW_CONCURRENCY: int = Field(1, description="Concurrent realtime workflow executions")
     STANDARD_WORKFLOW_CONCURRENCY: int = Field(1, description="Concurrent standard workflow executions")
     STANDARD_WORKFLOW_BATCH_LIMIT: int = Field(50, description="Maximum delayed news items processed per standard workflow run")
@@ -65,6 +67,18 @@ class Settings(AzureServiceEmulatorSettings):
     HNW_RELEVANCE_MIN_SCORE: float = Field(
         0.85,
         description="Minimum hybrid score for HNW structured-match candidates",
+    )
+    EXECUTION_ROUTE_INDIRECT_MIN_TOP_MATCH_SCORE: float = Field(
+        0.48,
+        description="Minimum holdings-grounding top match score required for indirect single-pass insight generation",
+    )
+    EXECUTION_ROUTE_INDIRECT_MIN_MATCHED_HOLDINGS: int = Field(
+        1,
+        description="Minimum matched holdings required for indirect single-pass insight generation",
+    )
+    EXECUTION_ROUTE_SKIP_ON_SECURITY_TYPE_MISMATCH: bool = Field(
+        True,
+        description="Skip indirect generation when matched holdings conflict with inferred security type alignment",
     )
 
 settings = Settings()
