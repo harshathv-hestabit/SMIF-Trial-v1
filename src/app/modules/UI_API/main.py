@@ -1,8 +1,6 @@
 from __future__ import annotations
-
+from typing import Annotated
 from contextlib import asynccontextmanager
-import json
-from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -20,10 +18,6 @@ from app.modules.UI_API.services.ops import (
     load_news_rows,
     load_recent_insights,
 )
-# from app.modules.UI_API.services.pipeline import (
-#     run_pipeline_from_sample_folder,
-#     run_pipeline_from_upload,
-# )
 from app.modules.UI_API.settings import settings
 
 
@@ -71,7 +65,7 @@ def get_clients(request: Request) -> dict[str, list[dict[str, str]]]:
     return {"items": load_clients(_database(request))}
 
 
-@app.get("/api/clients/{client_id}/portfolio")
+@app.get("/api/clients/{client_id}/portfolio",responses={404:{"description":"Portfolio not found for given client id"}})
 def get_client_portfolio(request: Request, client_id: str):
     portfolio = load_client_portfolio(_database(request), client_id)
     if portfolio is None:
@@ -97,7 +91,7 @@ def get_ops_metrics(request: Request):
 @app.get("/api/ops/news")
 def get_ops_news(
     request: Request,
-    limit: int = Query(default=50, ge=1, le=200),
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
 ) -> dict[str, object]:
     items = load_news_rows(_database(request), limit)
     return {
@@ -106,7 +100,7 @@ def get_ops_news(
     }
 
 
-@app.get("/api/ops/news/{news_id}")
+@app.get("/api/ops/news/{news_id}",responses={404:{"description":"News Document not found"}})
 def get_ops_news_detail(request: Request, news_id: str):
     item = load_news_detail(_database(request), news_id)
     if item is None:
@@ -117,7 +111,7 @@ def get_ops_news_detail(request: Request, news_id: str):
 @app.get("/api/ops/insights")
 def get_ops_recent_insights(
     request: Request,
-    limit: int = Query(default=10, ge=1, le=50),
+    limit: Annotated[int, Query(ge=1, le=50)] = 10,
 ) -> dict[str, object]:
     items = load_recent_insights(_database(request), limit)
     return {

@@ -176,7 +176,7 @@ class NewsStreamListener:
         )
 
 
-async def create_listener(publisher: EventHubPublisher) -> NewsStreamListener:
+def create_listener(publisher: EventHubPublisher) -> NewsStreamListener:
     return NewsStreamListener(
         publisher=publisher,
         benzinga_api_key=settings.BENZINGA_API_KEY,
