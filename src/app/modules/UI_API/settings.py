@@ -9,6 +9,7 @@ class Settings(AzureServiceEmulatorSettings):
         "http://localhost:5173,http://localhost:4173",
         description="Comma-separated browser origins allowed to call the UI API directly",
     )
+    HOST_URL: str = Field("127.0.0.1",description="Host url for the application service")
 
 
 settings = Settings()
