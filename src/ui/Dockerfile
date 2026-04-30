@@ -13,3 +13,9 @@ COPY nginx.conf /etc/nginx/conf.d/default.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 
 EXPOSE 80
+
+RUN useradd -m appuser
+
+RUN chown -R appuser:appuser /app
+
+USER appuser

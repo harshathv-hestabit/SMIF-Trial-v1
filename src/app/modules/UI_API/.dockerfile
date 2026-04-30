@@ -17,4 +17,10 @@ COPY app/common ./app/common
 
 EXPOSE 8088
 
+RUN useradd -m appuser
+
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
 CMD ["uvicorn", "app.modules.UI_API.main:app", "--host", "0.0.0.0", "--port", "8088"]

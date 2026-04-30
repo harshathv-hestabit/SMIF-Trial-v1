@@ -14,4 +14,10 @@ COPY app/modules/__init__.py ./app/modules/__init__.py
 COPY app/modules/BACKUP_COPY ./app/modules/BACKUP_COPY
 COPY app/common ./app/common
 
+RUN useradd -m appuser
+
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
 CMD ["python", "-m", "app.modules.BACKUP_COPY"]
